@@ -1,70 +1,33 @@
 /**
  * ScreenClaw – Offscreen Recording Engine
- * Receives desktop MediaStream from popup via Port, optionally adds webcam/mic,
- * records via MediaRecorder, and saves file. Also responds to stop/pause/resume
- * messages from background.
+ * Uses getDisplayMedia() directly in the offscreen document to capture
+ * screen/window/tab. Records via MediaRecorder and downloads the file
+ * using an anchor-click approach for reliability.
  */
 
 let mediaRecorder = null;
 let recordedChunks = [];
-let screenStream = null;       // transferred from popup
-let webcamStream = null;       // acquired via getUserMedia
-let micStream = null;          // acquired via getUserMedia
+let screenStream = null;
+let webcamStream = null;
+let micStream = null;
 let combinedStream = null;
 let recordingStartTime = null;
-let popupPort = null;          // Port for communication with popup
 
-// ── Port Connection (from popup) ───────────────────────────────────────────
-
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === 'popup') {
-    // Disconnect any existing port
-    if (popupPort) {
-      popupPort.disconnect();
-    }
-    popupPort = port;
-    // Signal ready
-    port.postMessage({ type: 'OFFSCREEN_READY' });
-    port.onMessage.addListener(handlePortMessage);
-    // Clean up reference on disconnect
-    port.onDisconnect.addListener(() => {
-      if (popupPort === port) {
-        popupPort = null;
-      }
-    });
-  }
-});
-
-async function handlePortMessage(msg) {
-  if (msg.type === 'START_WITH_STREAM') {
-    const { mode, hasAudio, hasMic, screenStream: incomingScreenStream } = msg.payload;
-    try {
-      const result = await handleStart({ mode, hasAudio, hasMic, screenStream: incomingScreenStream });
-      // Send result back to popup
-      if (popupPort) {
-        popupPort.postMessage({ type: 'START_RESULT', success: result.success, error: result.error });
-      }
-      // Notify background that recording started (for state persistence)
-      if (result.success) {
-        chrome.runtime.sendMessage({
-          type: 'RECORDING_STARTED',
-          payload: { mode, hasAudio, hasMic },
-        });
-      }
-    } catch (err) {
-      if (popupPort) {
-        popupPort.postMessage({ type: 'START_RESULT', success: false, error: err.message });
-      }
-    }
-  }
-}
-
-// ── Runtime Message Handler (control commands) ─────────────────────────────
+// ── Runtime Message Handler ────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.target !== 'offscreen') return false;
 
   switch (message.type) {
+    case 'OFFSCREEN_START':
+      handleStart(message.payload).then((result) => {
+        sendResponse(result);
+      }).catch((err) => {
+        console.error('[Offscreen] Start error:', err);
+        sendResponse({ success: false, error: err.message });
+      });
+      return true;
+
     case 'OFFSCREEN_STOP':
       handleStop().then(sendResponse).catch((err) => {
         console.error('[Offscreen] Stop error:', err);
@@ -84,17 +47,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ── Recording Handlers ─────────────────────────────────────────────────────
 
-async function handleStart({ mode, hasAudio, hasMic, screenStream: incomingScreenStream }) {
+async function handleStart({ mode, hasAudio, hasMic }) {
   recordedChunks = [];
 
   const tracks = [];
 
-  // Use transferred desktop screen stream
-  if ((mode === 'screen' || mode === 'both') && incomingScreenStream) {
-    screenStream = incomingScreenStream;
-    screenStream.getVideoTracks().forEach((t) => tracks.push(t));
-    if (hasAudio) {
-      screenStream.getAudioTracks().forEach((t) => tracks.push(t));
+  // Use getDisplayMedia() directly in the offscreen document.
+  // The offscreen document was created with the DISPLAY_MEDIA reason,
+  // so Chrome permits getDisplayMedia() here without a user gesture.
+  if (mode === 'screen' || mode === 'both') {
+    try {
+      const displayConstraints = {
+        video: {
+          frameRate: { ideal: 30 },
+        },
+        audio: hasAudio,
+      };
+
+      screenStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
+      screenStream.getVideoTracks().forEach((t) => tracks.push(t));
+      if (hasAudio && screenStream.getAudioTracks().length > 0) {
+        screenStream.getAudioTracks().forEach((t) => tracks.push(t));
+      }
+    } catch (err) {
+      console.error('[Offscreen] Failed to create desktop stream:', err);
+      if (err.name === 'NotAllowedError') {
+        throw new Error('Screen capture was cancelled or denied by the user.');
+      }
+      let errorMsg = 'Failed to capture desktop: ' + err.message;
+      if (hasAudio) {
+        errorMsg += '. If you enabled System Audio, please ensure you also checked the "Share system audio" box in the Chrome picker.';
+      }
+      throw new Error(errorMsg);
     }
   }
 
@@ -133,13 +117,14 @@ async function handleStart({ mode, hasAudio, hasMic, screenStream: incomingScree
   }
 
   if (tracks.length === 0) {
-    throw new Error('No media tracks available. Please check: screen/window/tab selection must include audio if System Audio is enabled, and Microphone/Webcam permissions must be granted.');
+    throw new Error('No media tracks available. Please check permissions.');
   }
 
   combinedStream = new MediaStream(tracks);
 
-  // Determine best supported mime type
+  // Determine best supported MIME type – prefer MP4 for native Windows playback
   const mimeType = getSupportedMimeType();
+  console.log('[Offscreen] Using MIME type:', mimeType);
 
   mediaRecorder = new MediaRecorder(combinedStream, {
     mimeType,
@@ -152,7 +137,11 @@ async function handleStart({ mode, hasAudio, hasMic, screenStream: incomingScree
     }
   };
 
+  // IMPORTANT: stopAllStreams is called HERE (inside onstop) instead of
+  // in handleStop(). This ensures MediaRecorder fully finalises the
+  // container headers before the underlying tracks are destroyed.
   mediaRecorder.onstop = () => {
+    stopAllStreams();
     saveRecording(mimeType);
   };
 
@@ -161,7 +150,7 @@ async function handleStart({ mode, hasAudio, hasMic, screenStream: incomingScree
   };
 
   recordingStartTime = Date.now();
-  mediaRecorder.start(1000); // Collect data every second
+  mediaRecorder.start(1000); // collect data every second
 
   return { success: true };
 }
@@ -171,10 +160,11 @@ async function handleStop() {
     return { success: false, error: 'No active recording' };
   }
 
+  // Request any buffered data, then stop.
+  // Do NOT call stopAllStreams() here – let onstop handle it so the
+  // MediaRecorder can write proper container-end bytes first.
+  mediaRecorder.requestData();
   mediaRecorder.stop();
-
-  // Stop all tracks
-  stopAllStreams();
 
   return { success: true };
 }
@@ -197,14 +187,22 @@ async function handleResume() {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/**
+ * Prefer MP4 (H.264 + AAC) so the file plays natively on Windows
+ * without requiring VLC or additional codecs.  Falls back to WebM.
+ */
 function getSupportedMimeType() {
   const types = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',   // H.264 Baseline + AAC-LC
+    'video/mp4;codecs=avc1,mp4a.40.2',           // H.264 + AAC
+    'video/mp4;codecs=avc1.42E01E,opus',          // H.264 + Opus
+    'video/mp4;codecs=avc1,opus',
+    'video/mp4',
     'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
     'video/webm;codecs=vp9',
     'video/webm;codecs=vp8',
     'video/webm',
-    'video/mp4',
   ];
   for (const type of types) {
     if (MediaRecorder.isTypeSupported(type)) return type;
@@ -224,11 +222,19 @@ function stopAllStreams() {
   combinedStream = null;
 }
 
+/**
+ * Save the recording.  Uses a Blob URL + <a download> click to trigger
+ * the browser's built-in "Save As" flow.  This avoids the old approach
+ * of converting to a data URL and sending it over chrome.runtime messaging,
+ * which was unreliable for large files (base64 bloat + 64 MB message limit).
+ *
+ * After the download is triggered we notify the background so it can
+ * update the recording history.
+ */
 function saveRecording(mimeType) {
   if (recordedChunks.length === 0) return;
 
   const blob = new Blob(recordedChunks, { type: mimeType });
-  const url = URL.createObjectURL(blob);
 
   const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -238,20 +244,29 @@ function saveRecording(mimeType) {
     ? Math.round((Date.now() - recordingStartTime) / 1000)
     : 0;
 
-  // Download via anchor element
+  // Create a Blob URL and trigger download via an invisible <a> element.
+  // This works in the offscreen document and avoids data-URL size limits.
+  const blobUrl = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
+  a.href = blobUrl;
   a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
 
-  // Notify background about saved recording
+  // Clean up after a short delay so the browser has time to start the download
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
+  }, 3000);
+
+  // Notify background for history tracking (metadata only, no heavy payload)
   chrome.runtime.sendMessage({
     type: 'RECORDING_SAVED',
     payload: { filename, size: blob.size, duration },
   });
 
   // Cleanup
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
   recordedChunks = [];
   recordingStartTime = null;
 }

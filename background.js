@@ -54,6 +54,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleMessage(message, sender) {
   switch (message.type) {
+    case 'START_RECORDING': {
+      try {
+        await ensureOffscreenDocument();
+
+        // Give offscreen a moment to initialize its listeners
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // Forward start command to offscreen document
+        const response = await chrome.runtime.sendMessage({
+          type: 'OFFSCREEN_START',
+          target: 'offscreen',
+          payload: message.payload,
+        });
+
+        if (response && response.success) {
+          const { mode, hasAudio, hasMic } = message.payload;
+          recordingState = {
+            isRecording: true,
+            isPaused: false,
+            startTime: Date.now(),
+            mode,
+            hasAudio,
+            hasMic,
+          };
+          await chrome.storage.local.set({ recordingState });
+        }
+
+        return response || { success: false, error: 'No response from offscreen' };
+      } catch (err) {
+        console.error('[ScreenClaw] START_RECORDING error:', err);
+        return { success: false, error: err.message };
+      }
+    }
+
     case 'ENSURE_OFFSCREEN': {
       await ensureOffscreenDocument();
       return { success: true };
@@ -88,7 +122,7 @@ async function handleMessage(message, sender) {
         hasMic: true,
       };
       await chrome.storage.local.set({ recordingState });
-      setTimeout(() => closeOffscreenDocument(), 2000);
+      setTimeout(() => closeOffscreenDocument(), 10000);
       return response;
     }
 
@@ -115,6 +149,8 @@ async function handleMessage(message, sender) {
     case 'GET_STATE': {
       return { success: true, state: recordingState };
     }
+
+
 
     case 'RECORDING_SAVED': {
       const { filename, size, duration } = message.payload;
