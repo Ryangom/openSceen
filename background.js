@@ -90,7 +90,10 @@ async function handleMessage(message, sender) {
 
       await ensureOffscreenDocument();
 
-      // Forward to offscreen document
+       // Give offscreen document time to initialize its message listener
+       await new Promise(resolve => setTimeout(resolve, 300));
+
+       // Forward to offscreen document
       const response = await chrome.runtime.sendMessage({
         type: 'OFFSCREEN_START',
         target: 'offscreen',
@@ -162,7 +165,7 @@ async function handleMessage(message, sender) {
       return { success: true, state: recordingState };
     }
 
-    case 'RECORDING_SAVED': {
+     case 'RECORDING_SAVED': {
       // Offscreen document saved the recording; store metadata
       const { filename, size, duration } = message.payload;
       const history = (await chrome.storage.local.get('recordingHistory'))

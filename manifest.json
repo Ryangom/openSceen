@@ -10,13 +10,16 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": [
-    "tabCapture",
-    "activeTab",
-    "offscreen",
-    "storage",
-    "desktopCapture"
-  ],
+   "permissions": [
+     "tabCapture",
+     "activeTab",
+     "offscreen",
+     "storage",
+     "desktopCapture",
+     "camera",
+     "microphone",
+     "downloads"
+   ],
   "action": {
     "default_popup": "popup/popup.html"
   },
@@ -24,11 +27,14 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["content.css"]
-    }
-  ]
+   "content_scripts": [
+     {
+       "matches": ["<all_urls>"],
+       "js": ["content.js"],
+       "css": ["content.css"]
+     }
+   ],
+   "content_security_policy": {
+     "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com"
+   }
 }

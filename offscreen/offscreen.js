@@ -52,17 +52,13 @@ async function handleStart({ mode, hasAudio, hasMic, streamId }) {
   if ((mode === 'screen' || mode === 'both') && streamId) {
     const constraints = {
       audio: hasAudio ? {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: streamId,
-        }
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: streamId,
       } : false,
       video: {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: streamId,
-          maxFrameRate: 30,
-        },
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: streamId,
+        maxFrameRate: 30,
       },
     };
 
@@ -84,11 +80,7 @@ async function handleStart({ mode, hasAudio, hasMic, streamId }) {
       },
       audio: false,
     });
-
-    if (mode === 'webcam') {
-      webcamStream.getVideoTracks().forEach((t) => tracks.push(t));
-    }
-    // For 'both' mode, webcam overlay is handled via content script
+    webcamStream.getVideoTracks().forEach((t) => tracks.push(t));
   }
 
   // Microphone capture
@@ -109,7 +101,7 @@ async function handleStart({ mode, hasAudio, hasMic, streamId }) {
   }
 
   if (tracks.length === 0) {
-    throw new Error('No media tracks available');
+    throw new Error('No media tracks available. Please check: screen/window/tab selection must include audio if System Audio is enabled, and Microphone permission must be granted.');
   }
 
   combinedStream = new MediaStream(tracks);
@@ -206,10 +198,9 @@ function stopAllStreams() {
 function saveRecording(mimeType) {
   if (recordedChunks.length === 0) return;
 
-  const blob = new Blob(recordedChunks, { type: mimeType });
-  const url = URL.createObjectURL(blob);
+   const blob = new Blob(recordedChunks, { type: mimeType });
 
-  const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+   const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `ScreenClaw_${timestamp}.${extension}`;
 
@@ -217,11 +208,35 @@ function saveRecording(mimeType) {
     ? Math.round((Date.now() - recordingStartTime) / 1000)
     : 0;
 
-  // Download via anchor element
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
+  // Note: blob URL cannot be used with chrome.downloads directly (origin constraints).
+  // Instead, we send blob data to background via message (small files only) or use anchor click.
+  // For production, we'll use anchor click with a hidden iframe to bypass offscreen block.
+  // However, the offscreen document can create an <a> and .click() if we open the offscreen
+  // as a visible document? Actually, we can use the offscreen's window to trigger download.
+  // Chrome blocks downloads not triggered by user gesture in offscreen; but we can workaround:
+  // use chrome.downloads.download with the blob URL — it works in extension contexts.
+
+  const url = URL.createObjectURL(blob);
+
+   // Use chrome.downloads API (available in offscreen context)
+   chrome.downloads.download({
+     url: url,
+     filename: filename,
+     saveAs: false,
+   }).catch((err) => {
+     console.error('[Offscreen] Download failed:', err);
+     // Fallback: try anchor click
+     const a = document.createElement('a');
+     a.href = url;
+     a.download = filename;
+     a.style.display = 'none';
+     document.body.appendChild(a);
+     a.click();
+     document.body.removeChild(a);
+   });
+
+   // Revoke blob URL after a delay
+   setTimeout(() => URL.revokeObjectURL(url), 10000);
 
   // Notify background about saved recording
   chrome.runtime.sendMessage({
@@ -231,10 +246,8 @@ function saveRecording(mimeType) {
       size: blob.size,
       duration,
     },
-  });
+   });
 
-  // Cleanup
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-  recordedChunks = [];
-  recordingStartTime = null;
-}
+   recordedChunks = [];
+   recordingStartTime = null;
+ }
