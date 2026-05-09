@@ -103,8 +103,10 @@ async function startRecording() {
       throw new Error(result?.error || 'Failed to start recording');
     }
 
-    // Recording started successfully
-    enterRecordingUI();
+    // Recording started successfully — close the popup so it doesn't
+    // appear in the screen recording.  When the user clicks the extension
+    // icon again, restoreState() will show the stop / pause controls.
+    window.close();
   } catch (err) {
     console.error('Start recording error:', err);
     btnRecord.disabled = false;

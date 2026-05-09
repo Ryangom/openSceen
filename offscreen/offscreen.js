@@ -150,7 +150,10 @@ async function handleStart({ mode, hasAudio, hasMic }) {
   };
 
   recordingStartTime = Date.now();
-  mediaRecorder.start(1000); // collect data every second
+  // No timeslice — this makes Chrome write a non-fragmented container
+  // with a complete sample table (moov atom for MP4 / Cues for WebM),
+  // which is required for the seek slider to work in media players.
+  mediaRecorder.start();
 
   return { success: true };
 }
@@ -160,10 +163,10 @@ async function handleStop() {
     return { success: false, error: 'No active recording' };
   }
 
-  // Request any buffered data, then stop.
-  // Do NOT call stopAllStreams() here – let onstop handle it so the
+  // Just call stop(). Do NOT call requestData() before stop — that would
+  // create a fragment boundary that breaks the seek index.
+  // Do NOT call stopAllStreams() here — let onstop handle it so the
   // MediaRecorder can write proper container-end bytes first.
-  mediaRecorder.requestData();
   mediaRecorder.stop();
 
   return { success: true };
