@@ -15,10 +15,7 @@
      "activeTab",
      "offscreen",
      "storage",
-     "desktopCapture",
-     "camera",
-     "microphone",
-     "downloads"
+     "desktopCapture"
    ],
   "action": {
     "default_popup": "popup/popup.html"

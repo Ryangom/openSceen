@@ -1,6 +1,7 @@
 /**
  * ScreenClaw – Background Service Worker
- * Manages recording state, offscreen document lifecycle, and message routing.
+ * Manages recording state, offscreen document lifecycle, message routing,
+ * and acquires desktop screen stream directly (using getUserMedia with chromeMediaSource).
  */
 
 let offscreenDocumentExists = false;
@@ -50,20 +51,29 @@ async function closeOffscreenDocument() {
   }
 }
 
-// ── Desktop Capture Helper ─────────────────────────────────────────────────
-
-function requestDesktopStream() {
+// ── Acquire Desktop Stream ───────────────────────────────────────────────────
+// Uses chromeMediaSource constraints to create MediaStream from streamId
+function acquireDesktopStream(streamId, includeAudio) {
   return new Promise((resolve, reject) => {
-    chrome.desktopCapture.chooseDesktopMedia(
-      ['screen', 'window', 'tab'],
-      (streamId, options) => {
-        if (!streamId) {
-          reject(new Error('User cancelled desktop capture'));
-          return;
-        }
-        resolve(streamId);
-      }
-    );
+    const constraints = {
+      audio: includeAudio ? {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: streamId,
+        },
+      } : false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: streamId,
+          maxFrameRate: 30,
+        },
+      },
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints)
+      .then(stream => resolve(stream))
+      .catch(err => reject(err));
   });
 }
 
@@ -80,24 +90,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function handleMessage(message, sender) {
   switch (message.type) {
     case 'START_RECORDING': {
-      const { mode, hasAudio, hasMic } = message.payload;
+      const { mode, hasAudio, hasMic, streamId } = message.payload;
 
-      // Get desktop stream ID if screen recording is needed
-      let streamId = null;
-      if (mode === 'screen' || mode === 'both') {
-        streamId = await requestDesktopStream();
+      // Validate streamId for screen/both modes
+      if ((mode === 'screen' || mode === 'both') && !streamId) {
+        return { success: false, error: 'Missing streamId for screen recording' };
+      }
+
+      // Acquire desktop stream in background (guaranteed to work)
+      let screenStream = null;
+      if ((mode === 'screen' || mode === 'both') && streamId) {
+        try {
+          screenStream = await acquireDesktopStream(streamId, hasAudio);
+        } catch (err) {
+          console.error('[ScreenClaw] Failed to acquire desktop stream:', err);
+          return { success: false, error: `Failed to capture screen: ${err.message}` };
+        }
       }
 
       await ensureOffscreenDocument();
 
-       // Give offscreen document time to initialize its message listener
-       await new Promise(resolve => setTimeout(resolve, 300));
+      // Wait for offscreen to be ready
+      await new Promise(resolve => setTimeout(resolve, 300));
 
-       // Forward to offscreen document
+      // Send to offscreen (screenStream will be cloned via structured clone)
       const response = await chrome.runtime.sendMessage({
         type: 'OFFSCREEN_START',
         target: 'offscreen',
-        payload: { mode, hasAudio, hasMic, streamId },
+        payload: { mode, hasAudio, hasMic, screenStream },
       });
 
       if (response && response.success) {
@@ -165,12 +185,11 @@ async function handleMessage(message, sender) {
       return { success: true, state: recordingState };
     }
 
-     case 'RECORDING_SAVED': {
-      // Offscreen document saved the recording; store metadata
+    case 'RECORDING_SAVED': {
       const { filename, size, duration } = message.payload;
       const history = (await chrome.storage.local.get('recordingHistory'))
         .recordingHistory || [];
-      
+
       history.unshift({
         filename,
         size,
@@ -179,7 +198,6 @@ async function handleMessage(message, sender) {
         mode: recordingState.mode,
       });
 
-      // Keep last 50 recordings
       if (history.length > 50) history.length = 50;
       await chrome.storage.local.set({ recordingHistory: history });
 
@@ -206,18 +224,15 @@ async function handleMessage(message, sender) {
 
 chrome.runtime.onStartup.addListener(async () => {
   const data = await chrome.storage.local.get('recordingState');
-  if (data.recordingState) {
-    // If we were recording before, reset state since streams are gone
-    if (data.recordingState.isRecording) {
-      recordingState = {
-        isRecording: false,
-        isPaused: false,
-        startTime: null,
-        mode: null,
-        hasAudio: true,
-        hasMic: true,
-      };
-      await chrome.storage.local.set({ recordingState });
-    }
+  if (data.recordingState && data.recordingState.isRecording) {
+    recordingState = {
+      isRecording: false,
+      isPaused: false,
+      startTime: null,
+      mode: null,
+      hasAudio: true,
+      hasMic: true,
+    };
+    await chrome.storage.local.set({ recordingState });
   }
 });

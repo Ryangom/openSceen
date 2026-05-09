@@ -82,17 +82,71 @@ function setupRecordingButtons() {
   btnPause.addEventListener('click', togglePause);
 }
 
+function getDesktopStreamId() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        resolve({ success: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+
+      const targetTab = tabs?.[0];
+      if (!targetTab) {
+        resolve({ success: false, error: 'No active tab found' });
+        return;
+      }
+
+      chrome.desktopCapture.chooseDesktopMedia(
+        ['screen', 'window', 'tab'],
+        targetTab,
+        (streamId) => {
+          if (chrome.runtime.lastError) {
+            resolve({ success: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+
+          if (!streamId) {
+            resolve({ success: false, cancelled: true, message: 'User cancelled desktop capture' });
+            return;
+          }
+
+          resolve({ success: true, streamId });
+        }
+      );
+    });
+  });
+}
+
 async function startRecording() {
   btnRecord.disabled = true;
   btnRecord.querySelector('span').textContent = 'Starting...';
 
   try {
+    // For screen modes, get desktop streamId first (requires user gesture)
+    let streamId = null;
+    if (selectedMode === 'screen' || selectedMode === 'both') {
+      const desktopResult = await getDesktopStreamId();
+      if (!desktopResult.success) {
+        if (desktopResult.cancelled) {
+          btnRecord.disabled = false;
+          btnRecord.querySelector('span').textContent = 'Cancelled';
+          setTimeout(() => {
+            btnRecord.querySelector('span').textContent = 'Start Recording';
+          }, 1500);
+          return;
+        }
+        throw new Error(desktopResult.error);
+      }
+      streamId = desktopResult.streamId;
+    }
+
     const response = await chrome.runtime.sendMessage({
       type: 'START_RECORDING',
       payload: {
         mode: selectedMode,
         hasAudio: toggleAudio.checked,
         hasMic: toggleMic.checked,
+        streamId,
       },
     });
 
@@ -104,12 +158,7 @@ async function startRecording() {
   } catch (err) {
     console.error('Start recording error:', err);
     btnRecord.disabled = false;
-    btnRecord.querySelector('span').textContent = 'Start Recording';
-
-    // Show error briefly
-    btnRecord.querySelector('span').textContent = err.message.includes('cancelled')
-      ? 'Cancelled'
-      : 'Error – Try Again';
+    btnRecord.querySelector('span').textContent = 'Error – Try Again';
     setTimeout(() => {
       btnRecord.querySelector('span').textContent = 'Start Recording';
     }, 2000);
