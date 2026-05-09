@@ -1,30 +1,70 @@
 /**
  * ScreenClaw – Offscreen Recording Engine
- * Receives screen MediaStream from background, adds webcam/mic tracks,
- * records via MediaRecorder, and saves file.
+ * Receives desktop MediaStream from popup via Port, optionally adds webcam/mic,
+ * records via MediaRecorder, and saves file. Also responds to stop/pause/resume
+ * messages from background.
  */
 
 let mediaRecorder = null;
 let recordedChunks = [];
-let screenStream = null;       // transferred from background
+let screenStream = null;       // transferred from popup
 let webcamStream = null;       // acquired via getUserMedia
 let micStream = null;          // acquired via getUserMedia
 let combinedStream = null;
 let recordingStartTime = null;
+let popupPort = null;          // Port for communication with popup
 
-// ── Message Handler ────────────────────────────────────────────────────────
+// ── Port Connection (from popup) ───────────────────────────────────────────
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'popup') {
+    // Disconnect any existing port
+    if (popupPort) {
+      popupPort.disconnect();
+    }
+    popupPort = port;
+    // Signal ready
+    port.postMessage({ type: 'OFFSCREEN_READY' });
+    port.onMessage.addListener(handlePortMessage);
+    // Clean up reference on disconnect
+    port.onDisconnect.addListener(() => {
+      if (popupPort === port) {
+        popupPort = null;
+      }
+    });
+  }
+});
+
+async function handlePortMessage(msg) {
+  if (msg.type === 'START_WITH_STREAM') {
+    const { mode, hasAudio, hasMic, screenStream: incomingScreenStream } = msg.payload;
+    try {
+      const result = await handleStart({ mode, hasAudio, hasMic, screenStream: incomingScreenStream });
+      // Send result back to popup
+      if (popupPort) {
+        popupPort.postMessage({ type: 'START_RESULT', success: result.success, error: result.error });
+      }
+      // Notify background that recording started (for state persistence)
+      if (result.success) {
+        chrome.runtime.sendMessage({
+          type: 'RECORDING_STARTED',
+          payload: { mode, hasAudio, hasMic },
+        });
+      }
+    } catch (err) {
+      if (popupPort) {
+        popupPort.postMessage({ type: 'START_RESULT', success: false, error: err.message });
+      }
+    }
+  }
+}
+
+// ── Runtime Message Handler (control commands) ─────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.target !== 'offscreen') return false;
 
   switch (message.type) {
-    case 'OFFSCREEN_START':
-      handleStart(message.payload).then(sendResponse).catch((err) => {
-        console.error('[Offscreen] Start error:', err);
-        sendResponse({ success: false, error: err.message });
-      });
-      return true;
-
     case 'OFFSCREEN_STOP':
       handleStop().then(sendResponse).catch((err) => {
         console.error('[Offscreen] Stop error:', err);
@@ -49,7 +89,7 @@ async function handleStart({ mode, hasAudio, hasMic, screenStream: incomingScree
 
   const tracks = [];
 
-  // Use transferred desktop screen stream (already contains video, optional audio)
+  // Use transferred desktop screen stream
   if ((mode === 'screen' || mode === 'both') && incomingScreenStream) {
     screenStream = incomingScreenStream;
     screenStream.getVideoTracks().forEach((t) => tracks.push(t));
@@ -166,11 +206,9 @@ function getSupportedMimeType() {
     'video/webm',
     'video/mp4',
   ];
-
   for (const type of types) {
     if (MediaRecorder.isTypeSupported(type)) return type;
   }
-
   return 'video/webm';
 }
 
@@ -180,7 +218,6 @@ function stopAllStreams() {
       stream.getTracks().forEach((track) => track.stop());
     }
   });
-
   screenStream = null;
   webcamStream = null;
   micStream = null;
@@ -201,7 +238,7 @@ function saveRecording(mimeType) {
     ? Math.round((Date.now() - recordingStartTime) / 1000)
     : 0;
 
-  // Download via anchor element (works in offscreen)
+  // Download via anchor element
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
@@ -210,11 +247,7 @@ function saveRecording(mimeType) {
   // Notify background about saved recording
   chrome.runtime.sendMessage({
     type: 'RECORDING_SAVED',
-    payload: {
-      filename,
-      size: blob.size,
-      duration,
-    },
+    payload: { filename, size: blob.size, duration },
   });
 
   // Cleanup

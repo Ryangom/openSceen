@@ -82,7 +82,10 @@ function setupRecordingButtons() {
   btnPause.addEventListener('click', togglePause);
 }
 
-function getDesktopStreamId() {
+// ── Desktop Stream Acquisition ──────────────────────────────────────────────
+// Called from within user gesture (button click) to preserve activation.
+// Returns { success, stream?|cancelled?|error? }
+function getDesktopStream(includeAudio) {
   return new Promise((resolve) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (chrome.runtime.lastError) {
@@ -110,7 +113,30 @@ function getDesktopStreamId() {
             return;
           }
 
-          resolve({ success: true, streamId });
+          // Immediately getUserMedia inside this callback (preserves user gesture)
+          const constraints = {
+            audio: includeAudio ? {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: streamId,
+              },
+            } : false,
+            video: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: streamId,
+                maxFrameRate: 30,
+              },
+            },
+          };
+
+          navigator.mediaDevices.getUserMedia(constraints)
+            .then((stream) => {
+              resolve({ success: true, stream });
+            })
+            .catch((err) => {
+              resolve({ success: false, error: err.message });
+            });
         }
       );
     });
@@ -122,10 +148,33 @@ async function startRecording() {
   btnRecord.querySelector('span').textContent = 'Starting...';
 
   try {
-    // For screen modes, get desktop streamId first (requires user gesture)
-    let streamId = null;
+    // Ensure offscreen document exists
+    await chrome.runtime.sendMessage({ type: 'ENSURE_OFFSCREEN' });
+
+    // Give offscreen a moment to initialize fully
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Connect to offscreen via Port
+    const port = chrome.runtime.connect({ name: 'popup' });
+
+    // Wait for offscreen READY signal
+    const readyPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Offscreen not ready'));
+      }, 3000);
+      port.onMessage.addListener((msg) => {
+        if (msg.type === 'OFFSCREEN_READY') {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+    });
+    await readyPromise;
+
+    // Acquire desktop stream if needed
+    let screenStream = null;
     if (selectedMode === 'screen' || selectedMode === 'both') {
-      const desktopResult = await getDesktopStreamId();
+      const desktopResult = await getDesktopStream(toggleAudio.checked);
       if (!desktopResult.success) {
         if (desktopResult.cancelled) {
           btnRecord.disabled = false;
@@ -133,28 +182,49 @@ async function startRecording() {
           setTimeout(() => {
             btnRecord.querySelector('span').textContent = 'Start Recording';
           }, 1500);
+          port.disconnect();
           return;
         }
         throw new Error(desktopResult.error);
       }
-      streamId = desktopResult.streamId;
+      screenStream = desktopResult.stream;
     }
 
-    const response = await chrome.runtime.sendMessage({
-      type: 'START_RECORDING',
+    // Wait for start result from offscreen
+    const startResultPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('No response from offscreen'));
+      }, 5000);
+      port.onMessage.addListener((msg) => {
+        if (msg.type === 'START_RESULT') {
+          clearTimeout(timeout);
+          resolve(msg);
+        }
+      });
+    });
+
+    // Send start command with screenStream (transfer ownership)
+    port.postMessage({
+      type: 'START_WITH_STREAM',
       payload: {
         mode: selectedMode,
         hasAudio: toggleAudio.checked,
         hasMic: toggleMic.checked,
-        streamId,
+        screenStream,
       },
-    });
+    }, screenStream ? [screenStream] : []);
 
-    if (response && response.success) {
-      enterRecordingUI();
-    } else {
-      throw new Error(response?.error || 'Failed to start recording');
+    const result = await startResultPromise;
+
+    // Disconnect the port – no longer needed
+    port.disconnect();
+
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to start recording');
     }
+
+    // Recording started successfully
+    enterRecordingUI();
   } catch (err) {
     console.error('Start recording error:', err);
     btnRecord.disabled = false;
@@ -167,13 +237,11 @@ async function startRecording() {
 
 async function stopRecording() {
   btnStop.disabled = true;
-
   try {
     await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
   } catch (err) {
     console.error('Stop recording error:', err);
   }
-
   exitRecordingUI();
 }
 
@@ -310,7 +378,6 @@ async function loadHistory() {
   try {
     const response = await chrome.runtime.sendMessage({ type: 'GET_HISTORY' });
     if (!response || !response.success) return;
-
     const history = response.history || [];
     renderHistory(history);
   } catch (err) {
@@ -319,7 +386,6 @@ async function loadHistory() {
 }
 
 function renderHistory(history) {
-  // Clear existing items except empty state
   historyList.querySelectorAll('.history-item').forEach((el) => el.remove());
 
   if (history.length === 0) {
@@ -349,11 +415,9 @@ function renderHistory(history) {
         <div class="history-meta">${duration} · ${size} · ${date}</div>
       </div>
     `;
-
     historyList.appendChild(el);
   });
 
-  // Clear history button
   btnClearHistory.onclick = async () => {
     await chrome.runtime.sendMessage({ type: 'CLEAR_HISTORY' });
     renderHistory([]);
