@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head><title>Generate Icons</title></head>
+<body>
+<h2>ScreenClaw Icon Generator</h2>
+<p>Click to download each icon size, then place them in the <code>icons/</code> folder.</p>
+<canvas id="c128" width="128" height="128"></canvas>
+<canvas id="c48" width="48" height="48"></canvas>
+<canvas id="c32" width="32" height="32"></canvas>
+<canvas id="c16" width="16" height="16"></canvas>
+<br><br>
+<button onclick="downloadAll()">Download All Icons</button>
+
+<script>
+function drawIcon(canvas) {
+  const ctx = canvas.getContext('2d');
+  const s = canvas.width;
+  const cx = s / 2, cy = s / 2;
+
+  // Background
+  ctx.fillStyle = '#0f0f14';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, s, s, s * 0.18);
+  ctx.fill();
+
+  // Outer ring gradient
+  const grad = ctx.createLinearGradient(0, 0, s, s);
+  grad.addColorStop(0, '#ff4d6d');
+  grad.addColorStop(1, '#c9184a');
+
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = s * 0.06;
+  ctx.beginPath();
+  ctx.arc(cx, cy, s * 0.36, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner filled circle
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, s * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Center dot
+  ctx.fillStyle = '#0f0f14';
+  ctx.beginPath();
+  ctx.arc(cx, cy, s * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+['c128','c48','c32','c16'].forEach(id => drawIcon(document.getElementById(id)));
+
+function downloadAll() {
+  [128, 48, 32, 16].forEach(size => {
+    const canvas = document.getElementById('c' + size);
+    const a = document.createElement('a');
+    a.download = 'icon' + size + '.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScreenClaw</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <circle cx="14" cy="14" r="13" stroke="url(#grad1)" stroke-width="2"/>
+            <circle cx="14" cy="14" r="6" fill="url(#grad1)"/>
+            <circle cx="14" cy="14" r="3" fill="#0f0f14"/>
+            <defs>
+              <linearGradient id="grad1" x1="0" y1="0" x2="28" y2="28">
+                <stop offset="0%" stop-color="#ff4d6d"/>
+                <stop offset="100%" stop-color="#c9184a"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <h1>ScreenClaw</h1>
+          <span class="version">v1.0</span>
+        </div>
+      </div>
+    </header>
+    <nav class="tabs" id="nav-tabs">
+      <button class="tab active" data-tab="record">Record</button>
+      <button class="tab" data-tab="history">History</button>
+    </nav>
+    <section class="tab-content active" id="tab-record">
+      <div class="section">
+        <label class="section-label">Capture Mode</label>
+        <div class="mode-grid">
+          <button class="mode-card active" data-mode="screen" id="mode-screen">
+            <div class="mode-icon">&#128187;</div>
+            <span>Screen</span>
+          </button>
+          <button class="mode-card" data-mode="webcam" id="mode-webcam">
+            <div class="mode-icon">&#127909;</div>
+            <span>Webcam</span>
+          </button>
+          <button class="mode-card" data-mode="both" id="mode-both">
+            <div class="mode-icon">&#127916;</div>
+            <span>Both</span>
+          </button>
+        </div>
+      </div>
+      <div class="section">
+        <label class="section-label">Audio</label>
+        <div class="toggle-row">
+          <span>System Audio</span>
+          <label class="toggle"><input type="checkbox" id="toggle-audio" checked><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <span>Microphone</span>
+          <label class="toggle"><input type="checkbox" id="toggle-mic" checked><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+      <div class="timer-display hidden" id="timer-display">
+        <div class="timer-pulse"></div>
+        <span class="timer-text" id="timer-text">00:00:00</span>
+      </div>
+      <div class="actions">
+        <button class="btn-record" id="btn-record">
+          <div class="btn-record-inner"><div class="rec-dot"></div></div>
+          <span>Start Recording</span>
+        </button>
+        <div class="secondary-actions hidden" id="secondary-actions">
+          <button class="btn-secondary" id="btn-pause">Pause</button>
+          <button class="btn-secondary btn-stop" id="btn-stop">Stop</button>
+        </div>
+      </div>
+    </section>
+    <section class="tab-content" id="tab-history">
+      <div class="history-list" id="history-list">
+        <div class="empty-state" id="empty-state">
+          <p>No recordings yet</p>
+          <span>Your recordings will appear here</span>
+        </div>
+      </div>
+      <button class="btn-clear hidden" id="btn-clear-history">Clear History</button>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
