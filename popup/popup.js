@@ -87,6 +87,38 @@ async function startRecording() {
   btnRecord.querySelector('span').textContent = 'Starting...';
 
   try {
+    // If microphone is enabled, ensure we have permission before handing
+    // off to the offscreen document (which is invisible and can't show
+    // Chrome's permission prompt).
+    let micAllowed = false;
+    if (toggleMic.checked) {
+      try {
+        const permStatus = await navigator.permissions.query({ name: 'microphone' });
+
+        if (permStatus.state === 'denied') {
+          // Permission was permanently blocked — guide user to settings
+          const openSettings = confirm(
+            'Microphone access is blocked for this extension.\n\n' +
+            'Click OK to open Chrome microphone settings, then allow access for this extension and try again.'
+          );
+          if (openSettings) {
+            chrome.tabs.create({ url: 'chrome://settings/content/microphone' });
+          }
+          btnRecord.disabled = false;
+          btnRecord.querySelector('span').textContent = 'Start Recording';
+          return;
+        }
+
+        // state is 'prompt' or 'granted' — request access
+        const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        testStream.getTracks().forEach((t) => t.stop()); // release immediately
+        micAllowed = true;
+      } catch (micErr) {
+        console.warn('Microphone permission not granted:', micErr);
+        // Continue without mic — offscreen will skip it gracefully
+      }
+    }
+
     // Send START_RECORDING to the background service worker.
     // The offscreen document will invoke getDisplayMedia() to show the
     // system picker and obtain the stream directly (no cross-context streamId).
@@ -95,7 +127,7 @@ async function startRecording() {
       payload: {
         mode: selectedMode,
         hasAudio: toggleAudio.checked,
-        hasMic: toggleMic.checked,
+        hasMic: micAllowed,
       },
     });
 
