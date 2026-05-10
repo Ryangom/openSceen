@@ -135,8 +135,8 @@ async function handleMessage(message, sender) {
           showRecordingBadge();
 
           // Trigger webcam overlay for "both" mode
-          if (mode === "both") {
-            chrome.tabs.sendMessage(tabId, { type: "SHOW_WEBCAM_OVERLAY" });
+          if (mode === "both" && tabId) {
+            chrome.tabs.sendMessage(tabId, { type: "SHOW_WEBCAM_OVERLAY" }).catch(() => {});
           }
         }
 
@@ -176,8 +176,8 @@ async function handleMessage(message, sender) {
       hideRecordingBadge();
 
       // Hide webcam overlay for "both" mode
-      if (mode === "both") {
-        chrome.tabs.sendMessage(tabId, { type: "HIDE_WEBCAM_OVERLAY" });
+      if (mode === "both" && tabId) {
+        chrome.tabs.sendMessage(tabId, { type: "HIDE_WEBCAM_OVERLAY" }).catch(() => {});
       }
 
       setTimeout(() => closeOffscreenDocument(), 10000);

@@ -15,9 +15,7 @@
     "tabs",
     "scripting",
     "offscreen",
-    "storage",
-    "camera",
-    "microphone"
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
