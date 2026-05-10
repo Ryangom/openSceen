@@ -45,134 +45,20 @@ async function closeOffscreenDocument() {
   }
 }
 
-// ── Recording Indicator via chrome.scripting ───────────────────────────────
-// This injects the overlay DIRECTLY into tabs using chrome.scripting API.
-// It does NOT depend on content scripts being loaded.
+// ── Recording Indicator (Extension Badge) ──────────────────────────────────
+// The badge sits on the extension toolbar icon — it is NEVER captured by
+// getDisplayMedia(), so it won't appear in the recorded video.
 
-async function showRecordingOverlayOnAllTabs() {
-  try {
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      // Skip restricted tabs
-      if (!tab.id || tab.id === chrome.tabs.TAB_ID_NONE) continue;
-      if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('about:'))) continue;
-
-      try {
-        // First inject the CSS
-        await chrome.scripting.insertCSS({
-          target: { tabId: tab.id },
-          css: `
-            #screenclaw-rec-indicator {
-              position: fixed !important;
-              top: 16px !important;
-              left: 50% !important;
-              transform: translateX(-50%) !important;
-              display: flex !important;
-              align-items: center !important;
-              gap: 8px !important;
-              padding: 8px 16px !important;
-              background: rgba(11, 11, 16, 0.9) !important;
-              backdrop-filter: blur(12px) !important;
-              border: 1px solid rgba(255, 77, 109, 0.4) !important;
-              border-radius: 24px !important;
-              color: #ff4d6d !important;
-              font-family: -apple-system, 'Segoe UI', sans-serif !important;
-              font-size: 12px !important;
-              font-weight: 700 !important;
-              letter-spacing: 1.5px !important;
-              z-index: 2147483647 !important;
-              box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
-              pointer-events: none !important;
-              animation: screenclaw-fadeIn 0.3s ease-out !important;
-            }
-            #screenclaw-rec-dot {
-              width: 8px !important;
-              height: 8px !important;
-              border-radius: 50% !important;
-              background: #ff4d6d !important;
-              animation: screenclaw-blink 1.2s ease-in-out infinite !important;
-              flex-shrink: 0 !important;
-            }
-            #screenclaw-rec-border {
-              position: fixed !important;
-              top: 0 !important;
-              left: 0 !important;
-              width: 100vw !important;
-              height: 100vh !important;
-              border: 4px solid rgba(255, 77, 109, 0.7) !important;
-              pointer-events: none !important;
-              z-index: 2147483646 !important;
-              box-sizing: border-box !important;
-            }
-            @keyframes screenclaw-blink {
-              0%, 100% { opacity: 1; }
-              50% { opacity: 0.3; }
-            }
-            @keyframes screenclaw-fadeIn {
-              from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
-              to { opacity: 1; transform: translateX(-50%) translateY(0); }
-            }
-          `,
-        });
-
-        // Then inject the JS to create the DOM elements
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: () => {
-            // Avoid duplicates
-            if (document.getElementById('screenclaw-rec-indicator')) return;
-
-            // Pill badge
-            const pill = document.createElement('div');
-            pill.id = 'screenclaw-rec-indicator';
-            const dot = document.createElement('div');
-            dot.id = 'screenclaw-rec-dot';
-            const text = document.createElement('span');
-            text.textContent = 'RECORDING';
-            pill.appendChild(dot);
-            pill.appendChild(text);
-            document.documentElement.appendChild(pill);
-
-            // Border overlay
-            const border = document.createElement('div');
-            border.id = 'screenclaw-rec-border';
-            document.documentElement.appendChild(border);
-
-            console.log('[ScreenClaw] Recording overlay injected via scripting API');
-          },
-        });
-      } catch (tabErr) {
-        // Tab might be restricted, ignore
-      }
-    }
-  } catch (err) {
-    console.error('[ScreenClaw] showRecordingOverlayOnAllTabs error:', err);
-  }
+function showRecordingBadge() {
+  chrome.action.setBadgeText({ text: 'REC' });
+  chrome.action.setBadgeBackgroundColor({ color: '#ff4d6d' });
+  chrome.action.setBadgeTextColor({ color: '#ffffff' });
+  chrome.action.setTitle({ title: 'ScreenClaw – Recording in progress…' });
 }
 
-async function hideRecordingOverlayOnAllTabs() {
-  try {
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      if (!tab.id || tab.id === chrome.tabs.TAB_ID_NONE) continue;
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: () => {
-            const pill = document.getElementById('screenclaw-rec-indicator');
-            if (pill) pill.remove();
-            const border = document.getElementById('screenclaw-rec-border');
-            if (border) border.remove();
-            console.log('[ScreenClaw] Recording overlay removed');
-          },
-        });
-      } catch (tabErr) {
-        // ignore
-      }
-    }
-  } catch (err) {
-    console.error('[ScreenClaw] hideRecordingOverlayOnAllTabs error:', err);
-  }
+function hideRecordingBadge() {
+  chrome.action.setBadgeText({ text: '' });
+  chrome.action.setTitle({ title: 'ScreenClaw – Screen & Video Recorder' });
 }
 
 // ── Message Handler ────────────────────────────────────────────────────────
@@ -228,9 +114,8 @@ async function handleMessage(message, sender) {
           };
           await chrome.storage.local.set({ recordingState });
 
-          console.log('[ScreenClaw] Recording started – injecting overlay into all tabs');
-          // Directly inject the overlay using chrome.scripting API
-          await showRecordingOverlayOnAllTabs();
+          // Show "REC" badge on extension icon (not captured in recording)
+          showRecordingBadge();
         }
 
         return response || { success: false, error: 'No response from offscreen' };
@@ -262,8 +147,8 @@ async function handleMessage(message, sender) {
       };
       await chrome.storage.local.set({ recordingState });
 
-      console.log('[ScreenClaw] Recording stopped – removing overlay from all tabs');
-      await hideRecordingOverlayOnAllTabs();
+      // Clear badge
+      hideRecordingBadge();
 
       setTimeout(() => closeOffscreenDocument(), 10000);
       return response;
@@ -334,31 +219,8 @@ chrome.runtime.onStartup.addListener(async () => {
   }
 });
 
-chrome.runtime.onInstalled.addListener(async (details) => {
+chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install' || details.reason === 'update') {
     chrome.tabs.create({ url: chrome.runtime.getURL('onboarding/onboarding.html') });
-  }
-
-  // Re-inject content scripts into all existing tabs after install/update
-  try {
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      if (!tab.id || tab.id === chrome.tabs.TAB_ID_NONE) continue;
-      if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('about:'))) continue;
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['content.js'],
-        });
-        await chrome.scripting.insertCSS({
-          target: { tabId: tab.id },
-          files: ['content.css'],
-        });
-      } catch (e) {
-        // Restricted tab, ignore
-      }
-    }
-  } catch (e) {
-    console.error('[ScreenClaw] Failed to re-inject content scripts:', e);
   }
 });
