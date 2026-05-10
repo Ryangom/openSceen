@@ -82,46 +82,78 @@ function setupRecordingButtons() {
   btnPause.addEventListener('click', togglePause);
 }
 
+
+async function askForMicrophonePermission() {
+  try {
+    // This triggers the browser microphone permission prompt.
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    // We only needed permission here, so release the test stream.
+    stream.getTracks().forEach((track) => track.stop());
+
+    return true;
+  } catch (micErr) {
+    let logMsg = `Microphone permission not granted: ${micErr?.name} - ${micErr?.message}`;
+    if (micErr?.constraint) logMsg += ` | Constraint: ${micErr.constraint}`;
+    if (micErr?.stack) logMsg += `\nStack: ${micErr.stack}`;
+    console.log(logMsg);
+
+    let message =
+      'Microphone access is required to record your voice.\n\n' +
+      'Click OK to open Extension settings and allow Microphone access.\n' +
+      'Click Cancel to continue recording without microphone audio.';
+
+    if (micErr?.name === 'NotFoundError') {
+      message =
+        'No microphone was found.\n\n' +
+        'Connect or enable a microphone, then try again.\n\n' +
+        'Click OK to open Extension settings.\n' +
+        'Click Cancel to continue without microphone audio.';
+    }
+
+    if (micErr?.name === 'NotReadableError') {
+      message =
+        'Chrome could not read from your microphone.\n\n' +
+        'Another app may be using it, or your OS privacy settings may be blocking it.\n\n' +
+        'Click OK to open Extension settings.\n' +
+        'Click Cancel to continue without microphone audio.';
+    }
+
+    const openSettings = confirm(message);
+
+    if (openSettings) {
+      chrome.tabs.create({
+        url: `chrome://settings/content/siteDetails?site=chrome-extension://${chrome.runtime.id}`,
+      });
+
+      // Stop here so the user can fix permission and try again.
+      return null;
+    }
+
+    // User chose to continue without mic.
+    return false;
+  }
+}
+
 async function startRecording() {
   btnRecord.disabled = true;
   btnRecord.querySelector('span').textContent = 'Starting...';
 
   try {
-    // If microphone is enabled, ensure we have permission before handing
-    // off to the offscreen document (which is invisible and can't show
-    // Chrome's permission prompt).
     let micAllowed = false;
+
     if (toggleMic.checked) {
-      try {
-        const permStatus = await navigator.permissions.query({ name: 'microphone' });
+      const permissionResult = await askForMicrophonePermission();
 
-        if (permStatus.state === 'denied') {
-          // Permission was permanently blocked — guide user to settings
-          const openSettings = confirm(
-            'Microphone access is blocked for this extension.\n\n' +
-            'Click OK to open Chrome microphone settings, then allow access for this extension and try again.'
-          );
-          if (openSettings) {
-            chrome.tabs.create({ url: 'chrome://settings/content/microphone' });
-          }
-          btnRecord.disabled = false;
-          btnRecord.querySelector('span').textContent = 'Start Recording';
-          return;
-        }
-
-        // state is 'prompt' or 'granted' — request access
-        const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        testStream.getTracks().forEach((t) => t.stop()); // release immediately
-        micAllowed = true;
-      } catch (micErr) {
-        console.warn('Microphone permission not granted:', micErr);
-        // Continue without mic — offscreen will skip it gracefully
+      if (permissionResult === null) {
+        btnRecord.disabled = false;
+        btnRecord.querySelector('span').textContent = 'Start Recording';
+        return;
       }
+
+      micAllowed = permissionResult;
     }
 
-    // Send START_RECORDING to the background service worker.
-    // The offscreen document will invoke getDisplayMedia() to show the
-    // system picker and obtain the stream directly (no cross-context streamId).
     const result = await chrome.runtime.sendMessage({
       type: 'START_RECORDING',
       payload: {
@@ -135,14 +167,15 @@ async function startRecording() {
       throw new Error(result?.error || 'Failed to start recording');
     }
 
-    // Recording started successfully — close the popup so it doesn't
-    // appear in the screen recording.  When the user clicks the extension
-    // icon again, restoreState() will show the stop / pause controls.
     window.close();
   } catch (err) {
-    console.error('Start recording error:', err);
+    let errMsg = `Start recording error: ${err?.name} - ${err?.message}`;
+    if (err?.stack) errMsg += `\nStack: ${err.stack}`;
+    console.error(errMsg);
+
     btnRecord.disabled = false;
-    btnRecord.querySelector('span').textContent = 'Error – Try Again';
+    btnRecord.querySelector('span').textContent = 'Error - Try Again';
+
     setTimeout(() => {
       btnRecord.querySelector('span').textContent = 'Start Recording';
     }, 2000);
