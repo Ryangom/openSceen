@@ -133,6 +133,11 @@ async function handleMessage(message, sender) {
 
           // Show "REC" badge on extension icon (not captured in recording)
           showRecordingBadge();
+
+          // Trigger webcam overlay for "both" mode
+          if (mode === "both") {
+            chrome.tabs.sendMessage(tabId, { type: "SHOW_WEBCAM_OVERLAY" });
+          }
         }
 
         return response || { success: false, error: 'No response from offscreen' };
@@ -148,6 +153,9 @@ async function handleMessage(message, sender) {
     }
 
     case 'STOP_RECORDING': {
+      const mode = recordingState.mode;
+      const tabId = recordingState.tabId;
+
       const response = await chrome.runtime.sendMessage({
         type: 'OFFSCREEN_STOP',
         target: 'offscreen',
@@ -166,6 +174,11 @@ async function handleMessage(message, sender) {
 
       // Clear badge
       hideRecordingBadge();
+
+      // Hide webcam overlay for "both" mode
+      if (mode === "both") {
+        chrome.tabs.sendMessage(tabId, { type: "HIDE_WEBCAM_OVERLAY" });
+      }
 
       setTimeout(() => closeOffscreenDocument(), 10000);
       return response;
@@ -237,7 +250,7 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === 'install' || details.reason === 'update') {
+  if (details.reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('onboarding/onboarding.html') });
   }
 });

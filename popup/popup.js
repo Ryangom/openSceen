@@ -231,8 +231,8 @@ function enterRecordingUI() {
     c.style.opacity = '0.5';
   });
 
-  elapsedSeconds = 0;
-  startTimer();
+  // elapsedSeconds is set in restoreState if restoring, else 0
+  startTimer(elapsedSeconds || 0);
 }
 
 function exitRecordingUI() {
@@ -258,8 +258,8 @@ function exitRecordingUI() {
 
 // ── Timer ──────────────────────────────────────────────────────────────────
 
-function startTimer() {
-  elapsedSeconds = 0;
+function startTimer(initial = 0) {
+  elapsedSeconds = initial;
   updateTimerDisplay();
   timerInterval = setInterval(() => {
     elapsedSeconds++;
@@ -308,13 +308,12 @@ async function restoreState() {
       toggleAudio.checked = response.state.hasAudio;
       toggleMic.checked = response.state.hasMic;
 
-      enterRecordingUI();
-
       // Restore timer
       if (response.state.startTime) {
         elapsedSeconds = Math.floor((Date.now() - response.state.startTime) / 1000);
-        updateTimerDisplay();
       }
+
+      enterRecordingUI();
 
       if (response.state.isPaused) {
         isPaused = true;

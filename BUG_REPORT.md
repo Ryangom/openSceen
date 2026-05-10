@@ -46,7 +46,7 @@ Also, send 'HIDE_WEBCAM_OVERLAY' on STOP_RECORDING.
 **Impact:** Potential inconsistencies.
 **Fix:** Ensure state is set only once, after confirming recording started.
 
-### 6. Onboarding Page Reference (OPEN)
+### 6. Onboarding Page Reference (RESOLVED)
 
 **Location:** `background.js`
 **Issue:** `onInstalled` listener references `'onboarding/onboarding.html'`, but the file does not exist.
