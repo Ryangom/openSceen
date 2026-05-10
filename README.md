@@ -74,7 +74,7 @@ openclaw/
 
 To set up the development environment:
 
-1. Clone the repository: `git clone <repository-url>`
+1. Clone the repository: `git clone https://github.com/Ryangom/openSceen.git`
 2. Open Chrome and go to `chrome://extensions/`
 3. Enable Developer Mode
 4. Click "Load unpacked" and select the project directory
