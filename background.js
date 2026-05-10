@@ -48,15 +48,32 @@ async function closeOffscreenDocument() {
 // ── Recording Indicator (Extension Badge) ──────────────────────────────────
 // The badge sits on the extension toolbar icon — it is NEVER captured by
 // getDisplayMedia(), so it won't appear in the recorded video.
+// It flashes on/off like a classic recording light for visibility.
+
+let badgeFlashInterval = null;
+let badgeVisible = true;
 
 function showRecordingBadge() {
   chrome.action.setBadgeText({ text: 'REC' });
   chrome.action.setBadgeBackgroundColor({ color: '#ff4d6d' });
   chrome.action.setBadgeTextColor({ color: '#ffffff' });
   chrome.action.setTitle({ title: 'ScreenClaw – Recording in progress…' });
+
+  // Flash the badge on/off every 800ms
+  badgeVisible = true;
+  if (badgeFlashInterval) clearInterval(badgeFlashInterval);
+  badgeFlashInterval = setInterval(() => {
+    badgeVisible = !badgeVisible;
+    chrome.action.setBadgeText({ text: badgeVisible ? 'REC' : '' });
+    chrome.action.setBadgeBackgroundColor({ color: badgeVisible ? '#ff4d6d' : '#8b0000' });
+  }, 800);
 }
 
 function hideRecordingBadge() {
+  if (badgeFlashInterval) {
+    clearInterval(badgeFlashInterval);
+    badgeFlashInterval = null;
+  }
   chrome.action.setBadgeText({ text: '' });
   chrome.action.setTitle({ title: 'ScreenClaw – Screen & Video Recorder' });
 }
