@@ -10,11 +10,13 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-   "permissions": [
-     "activeTab",
-     "offscreen",
-     "storage"
-   ],
+    "permissions": [
+      "activeTab",
+      "offscreen",
+      "storage",
+      "camera",
+      "microphone"
+    ],
   "action": {
     "default_popup": "popup/popup.html"
   },
