@@ -154,12 +154,21 @@ async function startRecording() {
       micAllowed = permissionResult;
     }
 
+    let tabId = null;
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length > 0) {
+        tabId = tabs[0].id;
+      }
+    } catch (e) {}
+
     const result = await chrome.runtime.sendMessage({
       type: 'START_RECORDING',
       payload: {
         mode: selectedMode,
         hasAudio: toggleAudio.checked,
         hasMic: micAllowed,
+        tabId: tabId,
       },
     });
 
