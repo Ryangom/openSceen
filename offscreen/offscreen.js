@@ -18,6 +18,7 @@ let canvasStream = null;
 let animationId = null;
 let drawIntervalId = null;
 let audioCtx = null;
+let shouldDiscard = false;
 
 // ── Runtime Message Handler ────────────────────────────────────────────────
 
@@ -41,6 +42,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
 
+    case 'OFFSCREEN_CANCEL':
+      shouldDiscard = true;
+      handleStop().then(sendResponse).catch((err) => {
+        console.error('[Offscreen] Cancel error:', err);
+        sendResponse({ success: false, error: err.message });
+      });
+      return true;
+
     case 'OFFSCREEN_PAUSE':
       handlePause().then(sendResponse);
       return true;
@@ -57,6 +66,7 @@ async function handleStart({ mode, hasAudio, hasMic }) {
   recordedChunks = [];
   stopAllStreams();
   recordingMode = mode;
+  shouldDiscard = false;
 
   try {
     // For "both" mode, we need to composite screen + webcam via canvas
@@ -269,7 +279,12 @@ function startRecording(stream) {
 
   mediaRecorder.onstop = () => {
     stopAllStreams();
-    saveRecording(mimeType);
+    if (shouldDiscard) {
+      recordedChunks = [];
+      shouldDiscard = false;
+    } else {
+      saveRecording(mimeType);
+    }
   };
 
   mediaRecorder.onerror = (event) => {

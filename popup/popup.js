@@ -454,3 +454,11 @@ function formatDuration(seconds) {
   if (m === 0) return `${s}s`;
   return `${m}m ${s}s`;
 }
+
+// Synchronize state with background/overlay events
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'STATE_CHANGED') {
+    restoreState();
+    loadHistory();
+  }
+});

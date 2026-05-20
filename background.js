@@ -90,6 +90,13 @@ function hideRecordingBadge() {
   chrome.action.setTitle({ title: 'ScreenClaw – Screen & Video Recorder' });
 }
 
+async function broadcastStateChange() {
+  chrome.runtime.sendMessage({ type: 'STATE_CHANGED', state: recordingState }).catch(() => {});
+  if (recordingState.tabId) {
+    chrome.tabs.sendMessage(recordingState.tabId, { type: 'RECORDING_STATE_CHANGED', state: recordingState }).catch(() => {});
+  }
+}
+
 // ── Message Handler ────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -153,6 +160,12 @@ async function handleMessage(message, sender) {
               console.warn('[ScreenClaw] SHOW_WEBCAM_OVERLAY message not received (tab may have changed or closed):', err.message);
             });
           }
+          if (tabId) {
+            chrome.tabs.sendMessage(tabId, { type: 'SHOW_CONTROLS_OVERLAY' }).catch((err) => {
+              console.warn('[ScreenClaw] SHOW_CONTROLS_OVERLAY message not received:', err.message);
+            });
+          }
+          await broadcastStateChange();
         }
 
         return response || { success: false, error: 'No response from offscreen' };
@@ -181,6 +194,11 @@ async function handleMessage(message, sender) {
           console.warn('[ScreenClaw] HIDE_WEBCAM_OVERLAY message not received (tab may have changed or closed):', err.message);
         });
       }
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'HIDE_CONTROLS_OVERLAY' }).catch((err) => {
+          console.warn('[ScreenClaw] HIDE_CONTROLS_OVERLAY message not received:', err.message);
+        });
+      }
 
       recordingState = {
         isRecording: false,
@@ -196,6 +214,42 @@ async function handleMessage(message, sender) {
 
       // Clear badge
       hideRecordingBadge();
+      await broadcastStateChange();
+
+      setTimeout(() => closeOffscreenDocument(), 10000);
+      return response;
+    }
+
+    case 'CANCEL_RECORDING': {
+      const mode = recordingState.mode;
+      const tabId = recordingState.tabId;
+
+      const response = await chrome.runtime.sendMessage({
+        type: 'OFFSCREEN_CANCEL',
+        target: 'offscreen',
+      });
+
+      if (mode === 'both' && tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'HIDE_WEBCAM_OVERLAY' }).catch(() => {});
+      }
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'HIDE_CONTROLS_OVERLAY' }).catch(() => {});
+      }
+
+      recordingState = {
+        isRecording: false,
+        isPaused: false,
+        startTime: null,
+        pauseTime: null,
+        mode: null,
+        hasAudio: true,
+        hasMic: true,
+        tabId: null,
+      };
+      await chrome.storage.local.set({ recordingState });
+
+      hideRecordingBadge();
+      await broadcastStateChange();
 
       setTimeout(() => closeOffscreenDocument(), 10000);
       return response;
@@ -209,6 +263,7 @@ async function handleMessage(message, sender) {
       recordingState.isPaused = true;
       recordingState.pauseTime = Date.now();
       await chrome.storage.local.set({ recordingState });
+      await broadcastStateChange();
       return response;
     }
 
@@ -224,6 +279,7 @@ async function handleMessage(message, sender) {
       }
       recordingState.isPaused = false;
       await chrome.storage.local.set({ recordingState });
+      await broadcastStateChange();
       return response;
     }
 
