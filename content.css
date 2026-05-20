@@ -48,7 +48,7 @@
   border-radius: 0 0 14px 0 !important;
 }
 
-/* ── Controls Overlay Bar ────────────────────────────────── */
+/* ── Controls Overlay Bar (Always Visible – Bottom Center) ── */
 
 .screenclaw-controls-overlay {
   position: fixed !important;
@@ -58,27 +58,21 @@
   display: flex !important;
   align-items: center !important;
   gap: 12px !important;
-  background: rgba(20, 20, 25, 0.88) !important;
-  backdrop-filter: blur(12px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(12px) saturate(180%) !important;
+  background: rgba(20, 20, 25, 0.92) !important;
+  backdrop-filter: blur(16px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(180%) !important;
   border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  padding: 8px 16px !important;
+  padding: 8px 20px !important;
   border-radius: 9999px !important;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
   z-index: 2147483647 !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
   color: #ffffff !important;
   user-select: none !important;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
-}
-
-/* Drag Handle */
-.screenclaw-controls-overlay .screenclaw-drag-handle {
-  cursor: move !important;
-  font-size: 14px !important;
-  color: rgba(255, 255, 255, 0.4) !important;
-  padding: 0 4px !important;
-  letter-spacing: 1px !important;
+  pointer-events: auto !important;
+  /* Ensure it NEVER hides */
+  visibility: visible !important;
+  opacity: 1 !important;
 }
 
 /* Timer Display */
@@ -179,66 +173,4 @@
 .screenclaw-controls-overlay #screenclaw-btn-cancel:hover {
   background: rgba(244, 63, 94, 0.2) !important;
   color: #f43f5e !important;
-}
-
-/* Minimize/Expand Toggle */
-.screenclaw-controls-overlay #screenclaw-btn-minimize {
-  border-left: 1px solid rgba(255, 255, 255, 0.15) !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  width: 24px !important;
-  height: 32px !important;
-  margin-left: 4px !important;
-  padding-left: 6px !important;
-  color: rgba(255, 255, 255, 0.5) !important;
-}
-.screenclaw-controls-overlay #screenclaw-btn-minimize:hover {
-  color: #ffffff !important;
-  transform: none !important;
-}
-
-.screenclaw-controls-overlay #screenclaw-btn-minimize .expand-icon {
-  display: none !important;
-}
-
-/* Minimized State Styles */
-.screenclaw-controls-overlay.minimized {
-  padding: 6px !important;
-  gap: 0 !important;
-  width: 36px !important;
-  height: 36px !important;
-  border-radius: 50% !important;
-  overflow: hidden !important;
-  background: rgba(20, 20, 25, 0.92) !important;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4) !important;
-  opacity: 0.25 !important;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.2s ease !important;
-}
-
-.screenclaw-controls-overlay.minimized:hover {
-  opacity: 0.95 !important;
-}
-
-.screenclaw-controls-overlay.minimized .screenclaw-drag-handle,
-.screenclaw-controls-overlay.minimized .screenclaw-timer,
-.screenclaw-controls-overlay.minimized .screenclaw-actions {
-  display: none !important;
-}
-
-.screenclaw-controls-overlay.minimized #screenclaw-btn-minimize {
-  border-left: none !important;
-  margin-left: 0 !important;
-  padding-left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  border-radius: 50% !important;
-  color: #ff4d6d !important;
-}
-
-.screenclaw-controls-overlay.minimized #screenclaw-btn-minimize .minimize-icon {
-  display: none !important;
-}
-.screenclaw-controls-overlay.minimized #screenclaw-btn-minimize .expand-icon {
-  display: block !important;
-  animation: screenclaw-pulse 1.2s infinite alternate !important;
 }

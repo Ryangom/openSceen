@@ -518,3 +518,32 @@ body {
   border: 2px solid var(--accent);
   animation: recording-border 2s ease-in-out infinite;
 }
+
+/* ── Debug Panel ─────────────────────────────────────────── */
+
+.debug-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.debug-textarea {
+  width: 100%;
+  height: 260px;
+  background: #141419;
+  color: #a0a0b0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: monospace;
+  font-size: 11px;
+  resize: none;
+  box-sizing: border-box;
+}
+
+.debug-container button {
+  width: 100%;
+}

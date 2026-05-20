@@ -1,10 +1,23 @@
 (function() {
+  async function logDebug(msg) {
+    const timestamp = new Date().toLocaleTimeString();
+    const logMsg = `[Content ${timestamp}] ${msg}`;
+    console.log(logMsg);
+    try {
+      const data = await chrome.storage.local.get('debugLogs');
+      const logs = data.debugLogs || [];
+      logs.push(logMsg);
+      if (logs.length > 200) logs.shift();
+      await chrome.storage.local.set({ debugLogs: logs });
+    } catch (e) {}
+  }
+
   if (window.hasScreenClawContentScriptInjected) {
-    console.log('[ScreenClaw] Content script already injected, skipping.');
+    logDebug('Content script already injected, skipping.');
     return;
   }
   window.hasScreenClawContentScriptInjected = true;
-  console.log('[ScreenClaw] Content script loaded on', window.location.href);
+  logDebug(`Content script loaded on ${window.location.href}`);
 
   let webcamOverlay = null;
   let webcamStream = null;
@@ -16,17 +29,14 @@
 
   // Controls Overlay Bar State
   let controlsOverlay = null;
-  let isDraggingControls = false;
-  let controlsDragOffset = { x: 0, y: 0 };
   let controlsTimerInterval = null;
   let controlsStartTime = null;
   let controlsPauseTime = null;
   let controlsIsPaused = false;
   let currentRecordingMode = 'screen';
-  let pipWindow = null;
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('[ScreenClaw] Received message:', message.type);
+    logDebug(`Received runtime message: ${message.type}`);
     switch (message.type) {
       case 'PING':
         sendResponse({ success: true });
@@ -53,7 +63,7 @@
         return true;
 
       case 'RECORDING_STATE_CHANGED':
-        console.log('[ScreenClaw] Recording state changed:', message.state);
+        logDebug(`Recording state changed: ${JSON.stringify(message.state)}`);
         currentRecordingMode = message.state.mode || 'screen';
         if (message.state.isRecording) {
           showControlsOverlay();
@@ -66,10 +76,11 @@
     }
   });
 
-  // Auto-restore overlays on page load/reload if recording is active on this tab
+  // Auto-restore overlays on page load/reload if recording is active
+  // Show on ANY tab during recording (not just the original sender tab)
   chrome.runtime.sendMessage({ type: 'GET_STATE' }).then((response) => {
-    console.log('[ScreenClaw] GET_STATE response on load:', response);
-    if (response && response.success && response.state.isRecording && response.isSenderTab) {
+    logDebug(`GET_STATE response on load: ${JSON.stringify(response)}`);
+    if (response && response.success && response.state.isRecording) {
       currentRecordingMode = response.state.mode || 'screen';
       if (response.state.mode === 'both') {
         showWebcamOverlay();
@@ -77,7 +88,7 @@
       showControlsOverlay();
       updateControlsState(response.state);
     }
-  }).catch((err) => console.error('[ScreenClaw] Failed to get state on load:', err));
+  }).catch((err) => logDebug(`Failed to get state on load: ${err.message}`));
 
   // ── Webcam Overlay ─────────────────────────────────────────────────────────
 
@@ -160,19 +171,15 @@
   // ── Controls Overlay Bar ───────────────────────────────────────────────────
 
   function showControlsOverlay() {
-    console.log('[ScreenClaw] showControlsOverlay() called');
+    logDebug('showControlsOverlay() called');
     if (controlsOverlay) {
-      console.log('[ScreenClaw] Controls overlay already exists');
+      logDebug('Controls overlay already exists');
       return;
     }
 
     controlsOverlay = document.createElement('div');
     controlsOverlay.id = 'screenclaw-controls-overlay';
     controlsOverlay.className = 'screenclaw-controls-overlay';
-
-    const dragHandle = document.createElement('div');
-    dragHandle.className = 'screenclaw-drag-handle';
-    dragHandle.textContent = '⋮⋮';
 
     const timerEl = document.createElement('div');
     timerEl.id = 'screenclaw-controls-timer';
@@ -200,37 +207,21 @@
     btnCancel.title = 'Cancel & Discard Recording';
     btnCancel.innerHTML = `<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`;
 
-    const btnPip = document.createElement('button');
-    btnPip.id = 'screenclaw-btn-pip';
-    btnPip.title = 'Pin Overlay (Always on Top)';
-    btnPip.innerHTML = `
-      <svg viewBox="0 0 24 24" style="width:16px; height:16px; fill:#e4e4e7;"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
-    `;
-
     actionsEl.appendChild(btnPause);
     actionsEl.appendChild(btnStop);
     actionsEl.appendChild(btnCancel);
-    
-    const isPipSupported = ('documentPictureInPicture' in window);
-    if (isPipSupported) {
-      actionsEl.appendChild(btnPip);
-    }
 
-    const btnMinimize = document.createElement('button');
-    btnMinimize.id = 'screenclaw-btn-minimize';
-    btnMinimize.title = 'Minimize Controls';
-    btnMinimize.innerHTML = `
-      <svg class="minimize-icon" viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
-      <svg class="expand-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/></svg>
-    `;
-
-    controlsOverlay.appendChild(dragHandle);
     controlsOverlay.appendChild(timerEl);
     controlsOverlay.appendChild(actionsEl);
-    controlsOverlay.appendChild(btnMinimize);
 
-    document.body.appendChild(controlsOverlay);
-    console.log('[ScreenClaw] Controls overlay appended to body');
+    // Fallback if body is not yet ready (e.g. document_start or early load)
+    const targetContainer = document.body || document.documentElement;
+    if (targetContainer) {
+      targetContainer.appendChild(controlsOverlay);
+      logDebug(`Controls overlay appended to ${targetContainer.tagName}`);
+    } else {
+      logDebug('Error: neither document.body nor document.documentElement exists!');
+    }
 
     // Button Action Listeners
     btnPause.addEventListener('click', () => {
@@ -247,152 +238,10 @@
         chrome.runtime.sendMessage({ type: 'CANCEL_RECORDING' });
       }
     });
-
-    btnMinimize.addEventListener('click', () => {
-      const isMin = controlsOverlay.classList.toggle('minimized');
-      btnMinimize.title = isMin ? 'Expand Controls' : 'Minimize Controls';
-    });
-
-    if (isPipSupported) {
-      btnPip.addEventListener('click', async () => {
-        if (pipWindow) {
-          pipWindow.close();
-          return;
-        }
-
-        try {
-          const width = currentRecordingMode === 'both' ? 320 : 280;
-          const height = currentRecordingMode === 'both' ? 360 : 80;
-
-          pipWindow = await window.documentPictureInPicture.requestWindow({
-            width: width,
-            height: height,
-            disallowReturnToOpener: true,
-          });
-
-          console.log('[ScreenClaw] Document PiP window opened successfully.');
-
-          // Load content.css
-          const link = pipWindow.document.createElement('link');
-          link.rel = 'stylesheet';
-          link.href = chrome.runtime.getURL('content.css');
-          pipWindow.document.head.appendChild(link);
-
-          // Copy page styleSheets rules
-          [...document.styleSheets].forEach((styleSheet) => {
-            try {
-              if (styleSheet.href && !styleSheet.href.startsWith(location.origin) && !styleSheet.href.startsWith('chrome-extension:')) return;
-              const cssRules = [...styleSheet.cssRules].map((rule) => rule.cssText).join('');
-              const style = pipWindow.document.createElement('style');
-              style.textContent = cssRules;
-              pipWindow.document.head.appendChild(style);
-            } catch (e) {
-              // Ignore cross-origin stylesheet errors
-            }
-          });
-
-          // Add inline override style specifically for the PiP window body
-          const style = pipWindow.document.createElement('style');
-          style.textContent = `
-            body {
-              background: #121218 !important;
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              padding: 8px;
-              height: 100vh;
-              overflow: hidden;
-              margin: 0;
-            }
-            .screenclaw-controls-overlay {
-              position: relative !important;
-              bottom: auto !important;
-              left: auto !important;
-              transform: none !important;
-              box-shadow: none !important;
-              border: none !important;
-              background: transparent !important;
-              padding: 0 !important;
-              width: 100% !important;
-            }
-            .screenclaw-overlay {
-              position: relative !important;
-              left: auto !important;
-              top: auto !important;
-              right: auto !important;
-              bottom: auto !important;
-              width: 100% !important;
-              height: auto !important;
-              flex: 1 !important;
-              margin-bottom: 8px !important;
-              border-radius: 8px !important;
-              box-shadow: none !important;
-              border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            }
-            .screenclaw-overlay video {
-              border-radius: 8px !important;
-              width: 100% !important;
-              height: 100% !important;
-              object-fit: cover !important;
-            }
-            .screenclaw-resize-handle {
-              display: none !important;
-            }
-          `;
-          pipWindow.document.head.appendChild(style);
-
-          // Relocate webcam and controls overlays into the PiP body
-          if (webcamOverlay) {
-            pipWindow.document.body.appendChild(webcamOverlay);
-          }
-          pipWindow.document.body.appendChild(controlsOverlay);
-
-          btnPip.style.background = 'rgba(16, 185, 129, 0.2)';
-          btnPip.querySelector('svg').style.fill = '#10b981';
-          btnPip.title = 'Unpin Overlay (Return to Tab)';
-
-          // Handle PiP exit
-          pipWindow.addEventListener('pagehide', () => {
-            console.log('[ScreenClaw] PiP window closed, restoring overlays back to the tab.');
-            pipWindow = null;
-
-            btnPip.style.background = '';
-            btnPip.querySelector('svg').style.fill = '#e4e4e7';
-            btnPip.title = 'Pin Overlay (Always on Top)';
-
-            if (webcamOverlay) {
-              webcamOverlay.style.position = '';
-              webcamOverlay.style.left = '';
-              webcamOverlay.style.top = '';
-              document.body.appendChild(webcamOverlay);
-            }
-            controlsOverlay.style.position = '';
-            controlsOverlay.style.left = '';
-            controlsOverlay.style.top = '';
-            document.body.appendChild(controlsOverlay);
-          });
-
-        } catch (err) {
-          console.error('[ScreenClaw] Failed to initialize PiP window:', err);
-        }
-      });
-    }
-
-    // Dragging event listeners
-    dragHandle.addEventListener('mousedown', startDragControls);
-    document.addEventListener('mousemove', onDrag);
-    document.addEventListener('mouseup', endDrag);
   }
 
   function hideControlsOverlay() {
-    console.log('[ScreenClaw] hideControlsOverlay() called');
-    if (pipWindow) {
-      try {
-        pipWindow.close();
-      } catch (e) {}
-      pipWindow = null;
-    }
+    logDebug('hideControlsOverlay() called');
     if (controlsOverlay) {
       controlsOverlay.remove();
       controlsOverlay = null;
@@ -448,15 +297,6 @@
     }
   }
 
-  function startDragControls(e) {
-    if (!e.target.classList.contains('screenclaw-drag-handle')) return;
-    isDraggingControls = true;
-    const rect = controlsOverlay.getBoundingClientRect();
-    controlsDragOffset.x = e.clientX - rect.left;
-    controlsDragOffset.y = e.clientY - rect.top;
-    controlsOverlay.style.transition = 'none';
-    e.preventDefault();
-  }
 
   // ── Shared Mouse Event Handlers ────────────────────────────────────────────
 
@@ -477,23 +317,11 @@
       webcamOverlay.style.setProperty('height', `${height}px`, 'important');
       return;
     }
-    if (isDraggingControls && controlsOverlay) {
-      const x = e.clientX - controlsDragOffset.x;
-      const y = e.clientY - controlsDragOffset.y;
-      controlsOverlay.style.setProperty('left', `${x}px`, 'important');
-      controlsOverlay.style.setProperty('top', `${y}px`, 'important');
-      controlsOverlay.style.setProperty('right', 'auto', 'important');
-      controlsOverlay.style.setProperty('bottom', 'auto', 'important');
-      controlsOverlay.style.setProperty('transform', 'none', 'important');
-      return;
-    }
   }
 
   function endDrag() {
     isDragging = false;
     isResizing = false;
-    isDraggingControls = false;
     if (webcamOverlay) webcamOverlay.style.transition = '';
-    if (controlsOverlay) controlsOverlay.style.transition = '';
   }
 })();

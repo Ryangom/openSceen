@@ -4,7 +4,6 @@
  */
 
 let offscreenDocumentExists = false;
-let overlayWindowId = null;
 let recordingState = {
   isRecording: false,
   isPaused: false,
@@ -17,17 +16,26 @@ let recordingState = {
   displaySurface: null,
 };
 
+async function logDebug(msg) {
+  const timestamp = new Date().toLocaleTimeString();
+  const logMsg = `[Background ${timestamp}] ${msg}`;
+  console.log(logMsg);
+  try {
+    const data = await chrome.storage.local.get('debugLogs');
+    const logs = data.debugLogs || [];
+    logs.push(logMsg);
+    if (logs.length > 200) logs.shift();
+    await chrome.storage.local.set({ debugLogs: logs });
+  } catch (e) {}
+}
+
 // Immediately load state from storage to handle service worker recreation
-const statePromise = chrome.storage.local.get(['recordingState', 'overlayWindowId']).then((data) => {
+const statePromise = chrome.storage.local.get(['recordingState']).then((data) => {
   if (data.recordingState) {
     recordingState = data.recordingState;
     if (recordingState.isRecording) {
       showRecordingBadge();
     }
-  }
-  if (data.overlayWindowId) {
-    overlayWindowId = data.overlayWindowId;
-    console.log('[ScreenClaw] Restored overlayWindowId:', overlayWindowId);
   }
 });
 
@@ -97,70 +105,84 @@ function hideRecordingBadge() {
 }
 
 async function ensureContentScriptInjected(tabId) {
-  console.log(`[ScreenClaw] ensureContentScriptInjected called for tab ${tabId}`);
+  await logDebug(`ensureContentScriptInjected called for tab ${tabId}`);
   if (!tabId) return;
   try {
     const tab = await chrome.tabs.get(tabId);
     if (!tab || !tab.url || tab.url.startsWith('chrome:') || tab.url.startsWith('chrome-extension:') || tab.url.startsWith('about:')) {
-      console.log(`[ScreenClaw] Tab ${tabId} is a restricted page (${tab?.url || 'unknown URL'}), skipping injection.`);
+      await logDebug(`Tab ${tabId} is restricted (${tab?.url || 'unknown URL'}), skipping injection.`);
       return;
     }
   } catch (e) {
-    console.error(`[ScreenClaw] Error getting info for tab ${tabId}:`, e);
+    await logDebug(`Error getting info for tab ${tabId}: ${e.message}`);
     return;
   }
 
   try {
-    // Send a ping to check if content script is active
-    console.log(`[ScreenClaw] Pinging content script on tab ${tabId}...`);
+    await logDebug(`Pinging content script on tab ${tabId}...`);
     await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    console.log(`[ScreenClaw] Ping succeeded for tab ${tabId}, content script is active.`);
+    await logDebug(`Ping succeeded for tab ${tabId}, content script is already active.`);
   } catch (err) {
-    // If ping fails, inject script and stylesheet
-    console.log(`[ScreenClaw] Ping failed (content script inactive) on tab ${tabId}. Error: ${err.message}. Programmatically injecting...`);
+    await logDebug(`Ping failed (content script inactive) on tab ${tabId}. Error: ${err.message}. Programmatically injecting...`);
     try {
       await chrome.scripting.insertCSS({
         target: { tabId },
         files: ['content.css']
       });
-      console.log(`[ScreenClaw] content.css injected successfully on tab ${tabId}`);
+      await logDebug(`content.css injected successfully on tab ${tabId}`);
 
       await chrome.scripting.executeScript({
         target: { tabId },
         files: ['content.js']
       });
-      console.log(`[ScreenClaw] content.js injected successfully on tab ${tabId}`);
+      await logDebug(`content.js injected successfully on tab ${tabId}`);
 
       // Small pause to allow initialization
       await new Promise(resolve => setTimeout(resolve, 150));
     } catch (injectErr) {
-      console.error(`[ScreenClaw] Failed to inject content script on tab ${tabId}:`, injectErr);
+      await logDebug(`Failed to inject content script on tab ${tabId}: ${injectErr.message}`);
     }
   }
 }
 
 async function showOverlaysOnTab(tabId) {
-  console.log(`[ScreenClaw] showOverlaysOnTab called for tab ${tabId}`);
+  await logDebug(`showOverlaysOnTab called for tab ${tabId}`);
   if (!tabId) return;
+
+  // Verify the tab exists and is injectable
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab || !tab.url || tab.url.startsWith('chrome:') || tab.url.startsWith('chrome-extension:') || tab.url.startsWith('about:') || tab.url.startsWith('edge:')) {
+      await logDebug(`Tab ${tabId} is a restricted page (${tab?.url}), skipping overlay.`);
+      return;
+    }
+  } catch (e) {
+    await logDebug(`Tab ${tabId} does not exist or error checking: ${e.message}`);
+    return;
+  }
+
   await ensureContentScriptInjected(tabId);
   
+  // Small delay to allow content script to fully initialize
+  await new Promise(resolve => setTimeout(resolve, 200));
+  
   if (recordingState.isRecording) {
-    console.log(`[ScreenClaw] Sending show overlay messages to tab ${tabId} (mode: ${recordingState.mode})...`);
+    await logDebug(`Sending show overlay messages to tab ${tabId} (mode: ${recordingState.mode})...`);
     if (recordingState.mode === 'both') {
       chrome.tabs.sendMessage(tabId, { type: 'SHOW_WEBCAM_OVERLAY' }).then(() => {
-        console.log(`[ScreenClaw] SHOW_WEBCAM_OVERLAY received by tab ${tabId}`);
+        logDebug(`SHOW_WEBCAM_OVERLAY received by tab ${tabId}`);
       }).catch((err) => {
-        console.warn('[ScreenClaw] SHOW_WEBCAM_OVERLAY message not received on tab:', tabId, err.message);
+        logDebug(`SHOW_WEBCAM_OVERLAY message not received on tab ${tabId}: ${err.message}`);
       });
     }
     chrome.tabs.sendMessage(tabId, { type: 'SHOW_CONTROLS_OVERLAY' }).then(() => {
-      console.log(`[ScreenClaw] SHOW_CONTROLS_OVERLAY received by tab ${tabId}`);
+      logDebug(`SHOW_CONTROLS_OVERLAY received by tab ${tabId}`);
     }).catch((err) => {
-      console.warn('[ScreenClaw] SHOW_CONTROLS_OVERLAY message not received on tab:', tabId, err.message);
+      logDebug(`SHOW_CONTROLS_OVERLAY message not received on tab ${tabId}: ${err.message}`);
     });
     chrome.tabs.sendMessage(tabId, { type: 'RECORDING_STATE_CHANGED', state: recordingState }).catch(() => {});
   } else {
-    console.log(`[ScreenClaw] Not showing overlays: isRecording is false`);
+    await logDebug(`Not showing overlays: isRecording is false`);
   }
 }
 
@@ -194,6 +216,8 @@ async function handleMessage(message, sender) {
   switch (message.type) {
     case 'START_RECORDING': {
       try {
+        await chrome.storage.local.set({ debugLogs: [] }); // Clear logs on start
+        await logDebug(`START_RECORDING message received, payload: ${JSON.stringify(message.payload)}`);
         await ensureOffscreenDocument();
 
         // Give offscreen a moment to initialize its listeners
@@ -201,23 +225,27 @@ async function handleMessage(message, sender) {
 
         // Resolve the tabId from the payload (sent by popup)
         let tabId = message.payload.tabId || (sender.tab ? sender.tab.id : null);
+        await logDebug(`Initial tabId resolved: ${tabId}`);
         if (!tabId) {
           try {
             const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
             if (tabs.length > 0) {
               tabId = tabs[0].id;
+              await logDebug(`Resolved tabId from query: ${tabId}`);
             }
           } catch (err) {
-            console.error('[ScreenClaw] Failed to get active tab:', err);
+            await logDebug(`Failed to get active tab via query: ${err.message}`);
           }
         }
 
+        await logDebug(`Sending OFFSCREEN_START to offscreen doc...`);
         // Forward start command to offscreen document
         const response = await chrome.runtime.sendMessage({
           type: 'OFFSCREEN_START',
           target: 'offscreen',
           payload: message.payload,
         });
+        await logDebug(`OFFSCREEN_START response: ${JSON.stringify(response)}`);
 
         if (response && response.success) {
           const { mode, hasAudio, hasMic } = message.payload;
@@ -239,54 +267,39 @@ async function handleMessage(message, sender) {
           // Show "REC" badge on extension icon (not captured in recording)
           showRecordingBadge();
 
-          if (displaySurface === 'monitor' || displaySurface === 'window') {
-            console.log(`[ScreenClaw] Recording display surface is: ${displaySurface}. Opening overlay window...`);
-            
-            const width = mode === 'both' ? 320 : 260;
-            const height = mode === 'both' ? 340 : 100;
-            
-            try {
-              let left = undefined;
-              let top = undefined;
-              try {
-                const currentWindow = await chrome.windows.getLastFocused();
-                if (currentWindow && currentWindow.left !== undefined && currentWindow.width !== undefined) {
-                  left = Math.round(currentWindow.left + currentWindow.width - width - 20);
-                  top = Math.round(currentWindow.top + currentWindow.height - height - 60);
-                }
-              } catch (e) {
-                console.warn('[ScreenClaw] Could not query last focused window bounds:', e);
+          // Wait for popup to close and tab focus to settle
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Re-resolve the active tab since the popup may have closed
+          // and the active tab may have changed
+          try {
+            const currentTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+            await logDebug(`Re-resolved currentTabs: ${JSON.stringify(currentTabs.map(t => ({ id: t.id, url: t.url })))}`);
+            if (currentTabs.length > 0) {
+              const newTabId = currentTabs[0].id;
+              // Only use the new tab if it's a regular page
+              const newTab = currentTabs[0];
+              if (newTab.url && !newTab.url.startsWith('chrome:') && !newTab.url.startsWith('chrome-extension:') && !newTab.url.startsWith('about:')) {
+                tabId = newTabId;
+                recordingState.tabId = tabId;
+                await chrome.storage.local.set({ recordingState });
+                await logDebug(`Updated tabId to re-resolved tabId: ${tabId}`);
+              } else {
+                await logDebug(`Re-resolved tab was restricted: ${newTab.url}, keeping original tabId ${tabId}`);
               }
-              
-              const createData = {
-                url: chrome.runtime.getURL('overlay-window/overlay-window.html'),
-                type: 'popup',
-                width: width,
-                height: height,
-                focused: true
-              };
-              if (left !== undefined && top !== undefined) {
-                createData.left = left;
-                createData.top = top;
-              }
-              
-              const win = await chrome.windows.create(createData);
-              overlayWindowId = win.id;
-              await chrome.storage.local.set({ overlayWindowId });
-              console.log('[ScreenClaw] Standalone overlay window created with ID:', overlayWindowId);
-            } catch (err) {
-              console.error('[ScreenClaw] Failed to create overlay window:', err);
             }
-          } else {
-            // For browser tabs, we show the in-tab overlays
-            await showOverlaysOnTab(tabId);
+          } catch (e) {
+            await logDebug(`Could not re-resolve active tab: ${e.message}`);
           }
+
+          // Show in-tab overlays on the active tab
+          await showOverlaysOnTab(tabId);
           await broadcastStateChange();
         }
 
         return response || { success: false, error: 'No response from offscreen' };
       } catch (err) {
-        console.error('[ScreenClaw] START_RECORDING error:', err);
+        await logDebug(`START_RECORDING caught error: ${err.message}`);
         return { success: false, error: err.message };
       }
     }
@@ -306,14 +319,6 @@ async function handleMessage(message, sender) {
       });
 
       await hideOverlaysOnTab(tabId);
-
-      if (overlayWindowId) {
-        try {
-          await chrome.windows.remove(overlayWindowId);
-        } catch (e) {}
-        overlayWindowId = null;
-        await chrome.storage.local.remove('overlayWindowId');
-      }
 
       recordingState = {
         isRecording: false,
@@ -346,14 +351,6 @@ async function handleMessage(message, sender) {
       });
 
       await hideOverlaysOnTab(tabId);
-
-      if (overlayWindowId) {
-        try {
-          await chrome.windows.remove(overlayWindowId);
-        } catch (e) {}
-        overlayWindowId = null;
-        await chrome.storage.local.remove('overlayWindowId');
-      }
 
       recordingState = {
         isRecording: false,
@@ -466,6 +463,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   if (recordingState && recordingState.isRecording) {
     const oldTabId = recordingState.tabId;
     const newTabId = activeInfo.tabId;
+    await logDebug(`onActivated event fired: switching from tab ${oldTabId} to ${newTabId}`);
     
     if (oldTabId && oldTabId !== newTabId) {
       await hideOverlaysOnTab(oldTabId);
@@ -481,21 +479,10 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   await statePromise;
   if (recordingState && recordingState.isRecording && tabId === recordingState.tabId) {
+    await logDebug(`onUpdated event fired for active recording tab ${tabId}, changeInfo: ${JSON.stringify(changeInfo)}`);
     if (changeInfo.status === 'complete') {
       await showOverlaysOnTab(tabId);
     }
   }
 });
 
-// Close handle overlayWindowId if window is manually closed
-chrome.windows.onRemoved.addListener(async (windowId) => {
-  if (windowId === overlayWindowId) {
-    console.log('[ScreenClaw] Standalone overlay window was manually closed.');
-    overlayWindowId = null;
-    await chrome.storage.local.remove('overlayWindowId');
-    if (recordingState && recordingState.isRecording) {
-      console.log('[ScreenClaw] Stopping recording since overlay window was closed.');
-      await handleMessage({ type: 'STOP_RECORDING' });
-    }
-  }
-});

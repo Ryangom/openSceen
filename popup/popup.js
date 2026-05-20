@@ -179,12 +179,16 @@ async function askForCameraPermission() {
 async function startRecording() {
   btnRecord.disabled = true;
   btnRecord.querySelector('span').textContent = 'Starting...';
+  await chrome.storage.local.set({ debugLogs: [] }); // Clear logs on start
+  await logDebug(`startRecording clicked, mode: ${selectedMode}`);
 
   try {
     let micAllowed = false;
 
     if (toggleMic.checked) {
+      await logDebug('Checking mic permission...');
       const permissionResult = await askForMicrophonePermission();
+      await logDebug(`Mic permission result: ${permissionResult}`);
 
       if (permissionResult === null) {
         btnRecord.disabled = false;
@@ -196,7 +200,9 @@ async function startRecording() {
     }
 
     if (selectedMode === 'webcam' || selectedMode === 'both') {
+      await logDebug('Checking camera permission...');
       const cameraResult = await askForCameraPermission();
+      await logDebug(`Camera permission result: ${cameraResult}`);
       if (cameraResult === null) {
         btnRecord.disabled = false;
         btnRecord.querySelector('span').textContent = 'Start Recording';
@@ -209,9 +215,18 @@ async function startRecording() {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tabs.length > 0) {
         tabId = tabs[0].id;
+        await logDebug(`Popup active tabId resolved: ${tabId} (${tabs[0].url})`);
+        
+        const url = tabs[0].url || '';
+        if (url.startsWith('chrome:') || url.startsWith('chrome-extension:') || url.startsWith('about:') || url.startsWith('edge:')) {
+          alert("Notice: Chrome security does not allow extensions to show overlays on browser internal pages (like chrome://extensions).\n\nThe recording controls overlay will automatically appear once you switch to or open any normal webpage (like google.com).");
+        }
       }
-    } catch (e) {}
+    } catch (e) {
+      await logDebug(`Failed to query active tab: ${e.message}`);
+    }
 
+    await logDebug('Sending START_RECORDING to background...');
     const result = await chrome.runtime.sendMessage({
       type: 'START_RECORDING',
       payload: {
@@ -221,15 +236,19 @@ async function startRecording() {
         tabId: tabId,
       },
     });
+    await logDebug(`START_RECORDING response: ${JSON.stringify(result)}`);
 
     if (!result || !result.success) {
       throw new Error(result?.error || 'Failed to start recording');
     }
 
+    // Wait a bit to ensure logs are fully written before closing the window
+    await new Promise(resolve => setTimeout(resolve, 300));
     window.close();
   } catch (err) {
     let errMsg = `Start recording error: ${err?.name} - ${err?.message}`;
     if (err?.stack) errMsg += `\nStack: ${err.stack}`;
+    await logDebug(errMsg);
     console.error(errMsg);
 
     btnRecord.disabled = false;
@@ -460,5 +479,44 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'STATE_CHANGED') {
     restoreState();
     loadHistory();
+  }
+});
+
+// ── Debug Logs Helper ──────────────────────────────────────────────────────
+async function logDebug(msg) {
+  const timestamp = new Date().toLocaleTimeString();
+  const logMsg = `[Popup ${timestamp}] ${msg}`;
+  console.log(logMsg);
+  try {
+    const data = await chrome.storage.local.get('debugLogs');
+    const logs = data.debugLogs || [];
+    logs.push(logMsg);
+    if (logs.length > 200) logs.shift();
+    await chrome.storage.local.set({ debugLogs: logs });
+  } catch (e) {}
+}
+
+async function refreshDebugLogs() {
+  const debugTextarea = document.getElementById('debug-textarea');
+  if (!debugTextarea) return;
+  try {
+    const data = await chrome.storage.local.get('debugLogs');
+    const logs = data.debugLogs || [];
+    debugTextarea.value = logs.join('\n');
+  } catch (e) {
+    debugTextarea.value = `Error loading logs: ${e.message}`;
+  }
+}
+
+// Attach event listeners for debug panel
+document.addEventListener('DOMContentLoaded', () => {
+  const refreshBtn = document.getElementById('btn-refresh-debug');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', refreshDebugLogs);
+  }
+
+  const debugTabBtn = document.querySelector('.tab[data-tab="debug"]');
+  if (debugTabBtn) {
+    debugTabBtn.addEventListener('click', refreshDebugLogs);
   }
 });

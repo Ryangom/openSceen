@@ -35,6 +35,7 @@
     <nav class="tabs" id="nav-tabs">
       <button class="tab active" data-tab="record">Record</button>
       <button class="tab" data-tab="history">History</button>
+      <button class="tab" data-tab="debug">Debug</button>
     </nav>
     <section class="tab-content active" id="tab-record">
       <div class="section">
@@ -92,6 +93,12 @@
         </div>
       </div>
       <button class="btn-clear hidden" id="btn-clear-history">Clear History</button>
+    </section>
+    <section class="tab-content" id="tab-debug">
+      <div class="debug-container">
+        <textarea id="debug-textarea" readonly class="debug-textarea"></textarea>
+        <button class="btn-secondary" id="btn-refresh-debug">Refresh Logs</button>
+      </div>
     </section>
   </div>
   <script src="popup.js"></script>
