@@ -141,7 +141,11 @@ async function handleStart({ mode, hasAudio, hasMic }) {
 
     combinedStream = new MediaStream(finalTracks);
     startRecording(combinedStream);
-    return { success: true };
+    
+    const track = screenStream ? screenStream.getVideoTracks()[0] : null;
+    const displaySurface = track ? track.getSettings().displaySurface : null;
+
+    return { success: true, displaySurface };
   } catch (err) {
     stopAllStreams();
     throw err;
@@ -235,7 +239,11 @@ async function handleBothMode({ hasAudio, hasMic }) {
   }
 
   startRecording(canvasStream);
-  return { success: true };
+
+  const track = screenStream ? screenStream.getVideoTracks()[0] : null;
+  const displaySurface = track ? track.getSettings().displaySurface : null;
+
+  return { success: true, displaySurface };
 }
 
 async function handleStop() {

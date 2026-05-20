@@ -4,6 +4,7 @@
  */
 
 let offscreenDocumentExists = false;
+let overlayWindowId = null;
 let recordingState = {
   isRecording: false,
   isPaused: false,
@@ -13,15 +14,20 @@ let recordingState = {
   hasAudio: true,
   hasMic: true,
   tabId: null,
+  displaySurface: null,
 };
 
 // Immediately load state from storage to handle service worker recreation
-const statePromise = chrome.storage.local.get('recordingState').then((data) => {
+const statePromise = chrome.storage.local.get(['recordingState', 'overlayWindowId']).then((data) => {
   if (data.recordingState) {
     recordingState = data.recordingState;
     if (recordingState.isRecording) {
       showRecordingBadge();
     }
+  }
+  if (data.overlayWindowId) {
+    overlayWindowId = data.overlayWindowId;
+    console.log('[ScreenClaw] Restored overlayWindowId:', overlayWindowId);
   }
 });
 
@@ -215,6 +221,7 @@ async function handleMessage(message, sender) {
 
         if (response && response.success) {
           const { mode, hasAudio, hasMic } = message.payload;
+          const displaySurface = response.displaySurface;
 
           recordingState = {
             isRecording: true,
@@ -225,13 +232,55 @@ async function handleMessage(message, sender) {
             hasAudio,
             hasMic,
             tabId,
+            displaySurface,
           };
           await chrome.storage.local.set({ recordingState });
 
           // Show "REC" badge on extension icon (not captured in recording)
           showRecordingBadge();
 
-          await showOverlaysOnTab(tabId);
+          if (displaySurface === 'monitor' || displaySurface === 'window') {
+            console.log(`[ScreenClaw] Recording display surface is: ${displaySurface}. Opening overlay window...`);
+            
+            const width = mode === 'both' ? 320 : 260;
+            const height = mode === 'both' ? 340 : 100;
+            
+            try {
+              let left = undefined;
+              let top = undefined;
+              try {
+                const currentWindow = await chrome.windows.getLastFocused();
+                if (currentWindow && currentWindow.left !== undefined && currentWindow.width !== undefined) {
+                  left = Math.round(currentWindow.left + currentWindow.width - width - 20);
+                  top = Math.round(currentWindow.top + currentWindow.height - height - 60);
+                }
+              } catch (e) {
+                console.warn('[ScreenClaw] Could not query last focused window bounds:', e);
+              }
+              
+              const createData = {
+                url: chrome.runtime.getURL('overlay-window/overlay-window.html'),
+                type: 'popup',
+                width: width,
+                height: height,
+                focused: true
+              };
+              if (left !== undefined && top !== undefined) {
+                createData.left = left;
+                createData.top = top;
+              }
+              
+              const win = await chrome.windows.create(createData);
+              overlayWindowId = win.id;
+              await chrome.storage.local.set({ overlayWindowId });
+              console.log('[ScreenClaw] Standalone overlay window created with ID:', overlayWindowId);
+            } catch (err) {
+              console.error('[ScreenClaw] Failed to create overlay window:', err);
+            }
+          } else {
+            // For browser tabs, we show the in-tab overlays
+            await showOverlaysOnTab(tabId);
+          }
           await broadcastStateChange();
         }
 
@@ -258,6 +307,14 @@ async function handleMessage(message, sender) {
 
       await hideOverlaysOnTab(tabId);
 
+      if (overlayWindowId) {
+        try {
+          await chrome.windows.remove(overlayWindowId);
+        } catch (e) {}
+        overlayWindowId = null;
+        await chrome.storage.local.remove('overlayWindowId');
+      }
+
       recordingState = {
         isRecording: false,
         isPaused: false,
@@ -267,6 +324,7 @@ async function handleMessage(message, sender) {
         hasAudio: true,
         hasMic: true,
         tabId: null,
+        displaySurface: null,
       };
       await chrome.storage.local.set({ recordingState });
 
@@ -289,6 +347,14 @@ async function handleMessage(message, sender) {
 
       await hideOverlaysOnTab(tabId);
 
+      if (overlayWindowId) {
+        try {
+          await chrome.windows.remove(overlayWindowId);
+        } catch (e) {}
+        overlayWindowId = null;
+        await chrome.storage.local.remove('overlayWindowId');
+      }
+
       recordingState = {
         isRecording: false,
         isPaused: false,
@@ -298,6 +364,7 @@ async function handleMessage(message, sender) {
         hasAudio: true,
         hasMic: true,
         tabId: null,
+        displaySurface: null,
       };
       await chrome.storage.local.set({ recordingState });
 
@@ -416,6 +483,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (recordingState && recordingState.isRecording && tabId === recordingState.tabId) {
     if (changeInfo.status === 'complete') {
       await showOverlaysOnTab(tabId);
+    }
+  }
+});
+
+// Close handle overlayWindowId if window is manually closed
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  if (windowId === overlayWindowId) {
+    console.log('[ScreenClaw] Standalone overlay window was manually closed.');
+    overlayWindowId = null;
+    await chrome.storage.local.remove('overlayWindowId');
+    if (recordingState && recordingState.isRecording) {
+      console.log('[ScreenClaw] Stopping recording since overlay window was closed.');
+      await handleMessage({ type: 'STOP_RECORDING' });
     }
   }
 });

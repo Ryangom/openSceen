@@ -22,6 +22,8 @@
   let controlsStartTime = null;
   let controlsPauseTime = null;
   let controlsIsPaused = false;
+  let currentRecordingMode = 'screen';
+  let pipWindow = null;
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[ScreenClaw] Received message:', message.type);
@@ -52,6 +54,7 @@
 
       case 'RECORDING_STATE_CHANGED':
         console.log('[ScreenClaw] Recording state changed:', message.state);
+        currentRecordingMode = message.state.mode || 'screen';
         if (message.state.isRecording) {
           showControlsOverlay();
           updateControlsState(message.state);
@@ -67,6 +70,7 @@
   chrome.runtime.sendMessage({ type: 'GET_STATE' }).then((response) => {
     console.log('[ScreenClaw] GET_STATE response on load:', response);
     if (response && response.success && response.state.isRecording && response.isSenderTab) {
+      currentRecordingMode = response.state.mode || 'screen';
       if (response.state.mode === 'both') {
         showWebcamOverlay();
       }
@@ -196,9 +200,21 @@
     btnCancel.title = 'Cancel & Discard Recording';
     btnCancel.innerHTML = `<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`;
 
+    const btnPip = document.createElement('button');
+    btnPip.id = 'screenclaw-btn-pip';
+    btnPip.title = 'Pin Overlay (Always on Top)';
+    btnPip.innerHTML = `
+      <svg viewBox="0 0 24 24" style="width:16px; height:16px; fill:#e4e4e7;"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+    `;
+
     actionsEl.appendChild(btnPause);
     actionsEl.appendChild(btnStop);
     actionsEl.appendChild(btnCancel);
+    
+    const isPipSupported = ('documentPictureInPicture' in window);
+    if (isPipSupported) {
+      actionsEl.appendChild(btnPip);
+    }
 
     const btnMinimize = document.createElement('button');
     btnMinimize.id = 'screenclaw-btn-minimize';
@@ -237,6 +253,132 @@
       btnMinimize.title = isMin ? 'Expand Controls' : 'Minimize Controls';
     });
 
+    if (isPipSupported) {
+      btnPip.addEventListener('click', async () => {
+        if (pipWindow) {
+          pipWindow.close();
+          return;
+        }
+
+        try {
+          const width = currentRecordingMode === 'both' ? 320 : 280;
+          const height = currentRecordingMode === 'both' ? 360 : 80;
+
+          pipWindow = await window.documentPictureInPicture.requestWindow({
+            width: width,
+            height: height,
+            disallowReturnToOpener: true,
+          });
+
+          console.log('[ScreenClaw] Document PiP window opened successfully.');
+
+          // Load content.css
+          const link = pipWindow.document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = chrome.runtime.getURL('content.css');
+          pipWindow.document.head.appendChild(link);
+
+          // Copy page styleSheets rules
+          [...document.styleSheets].forEach((styleSheet) => {
+            try {
+              if (styleSheet.href && !styleSheet.href.startsWith(location.origin) && !styleSheet.href.startsWith('chrome-extension:')) return;
+              const cssRules = [...styleSheet.cssRules].map((rule) => rule.cssText).join('');
+              const style = pipWindow.document.createElement('style');
+              style.textContent = cssRules;
+              pipWindow.document.head.appendChild(style);
+            } catch (e) {
+              // Ignore cross-origin stylesheet errors
+            }
+          });
+
+          // Add inline override style specifically for the PiP window body
+          const style = pipWindow.document.createElement('style');
+          style.textContent = `
+            body {
+              background: #121218 !important;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              padding: 8px;
+              height: 100vh;
+              overflow: hidden;
+              margin: 0;
+            }
+            .screenclaw-controls-overlay {
+              position: relative !important;
+              bottom: auto !important;
+              left: auto !important;
+              transform: none !important;
+              box-shadow: none !important;
+              border: none !important;
+              background: transparent !important;
+              padding: 0 !important;
+              width: 100% !important;
+            }
+            .screenclaw-overlay {
+              position: relative !important;
+              left: auto !important;
+              top: auto !important;
+              right: auto !important;
+              bottom: auto !important;
+              width: 100% !important;
+              height: auto !important;
+              flex: 1 !important;
+              margin-bottom: 8px !important;
+              border-radius: 8px !important;
+              box-shadow: none !important;
+              border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            }
+            .screenclaw-overlay video {
+              border-radius: 8px !important;
+              width: 100% !important;
+              height: 100% !important;
+              object-fit: cover !important;
+            }
+            .screenclaw-resize-handle {
+              display: none !important;
+            }
+          `;
+          pipWindow.document.head.appendChild(style);
+
+          // Relocate webcam and controls overlays into the PiP body
+          if (webcamOverlay) {
+            pipWindow.document.body.appendChild(webcamOverlay);
+          }
+          pipWindow.document.body.appendChild(controlsOverlay);
+
+          btnPip.style.background = 'rgba(16, 185, 129, 0.2)';
+          btnPip.querySelector('svg').style.fill = '#10b981';
+          btnPip.title = 'Unpin Overlay (Return to Tab)';
+
+          // Handle PiP exit
+          pipWindow.addEventListener('pagehide', () => {
+            console.log('[ScreenClaw] PiP window closed, restoring overlays back to the tab.');
+            pipWindow = null;
+
+            btnPip.style.background = '';
+            btnPip.querySelector('svg').style.fill = '#e4e4e7';
+            btnPip.title = 'Pin Overlay (Always on Top)';
+
+            if (webcamOverlay) {
+              webcamOverlay.style.position = '';
+              webcamOverlay.style.left = '';
+              webcamOverlay.style.top = '';
+              document.body.appendChild(webcamOverlay);
+            }
+            controlsOverlay.style.position = '';
+            controlsOverlay.style.left = '';
+            controlsOverlay.style.top = '';
+            document.body.appendChild(controlsOverlay);
+          });
+
+        } catch (err) {
+          console.error('[ScreenClaw] Failed to initialize PiP window:', err);
+        }
+      });
+    }
+
     // Dragging event listeners
     dragHandle.addEventListener('mousedown', startDragControls);
     document.addEventListener('mousemove', onDrag);
@@ -245,6 +387,12 @@
 
   function hideControlsOverlay() {
     console.log('[ScreenClaw] hideControlsOverlay() called');
+    if (pipWindow) {
+      try {
+        pipWindow.close();
+      } catch (e) {}
+      pipWindow = null;
+    }
     if (controlsOverlay) {
       controlsOverlay.remove();
       controlsOverlay = null;
