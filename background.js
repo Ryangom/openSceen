@@ -8,31 +8,44 @@ let recordingState = {
   isRecording: false,
   isPaused: false,
   startTime: null,
+  pauseTime: null,
   mode: null,
   hasAudio: true,
   hasMic: true,
   tabId: null,
 };
 
-async function ensureOffscreenDocument() {
-  if (offscreenDocumentExists) return;
-  try {
-    const existingContexts = await chrome.runtime.getContexts({
-      contextTypes: ['OFFSCREEN_DOCUMENT'],
-    });
-    if (existingContexts.length > 0) {
-      offscreenDocumentExists = true;
-      return;
+// Immediately load state from storage to handle service worker recreation
+const statePromise = chrome.storage.local.get('recordingState').then((data) => {
+  if (data.recordingState) {
+    recordingState = data.recordingState;
+    if (recordingState.isRecording) {
+      showRecordingBadge();
     }
-    await chrome.offscreen.createDocument({
-      url: 'offscreen/offscreen.html',
-      reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'],
-      justification: 'Recording screen and/or webcam with MediaRecorder',
-    });
-    offscreenDocumentExists = true;
-  } catch (err) {
-    console.error('[ScreenClaw] Failed to create offscreen document:', err);
   }
+});
+
+async function ensureOffscreenDocument() {
+   if (offscreenDocumentExists) return;
+   try {
+     if (chrome.runtime.getContexts) {
+       const existingContexts = await chrome.runtime.getContexts({
+         contextTypes: ['OFFSCREEN_DOCUMENT'],
+       });
+       if (existingContexts.length > 0) {
+         offscreenDocumentExists = true;
+         return;
+       }
+     }
+     await chrome.offscreen.createDocument({
+       url: 'offscreen/offscreen.html',
+       reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'],
+       justification: 'Recording screen and/or webcam with MediaRecorder',
+     });
+     offscreenDocumentExists = true;
+   } catch (err) {
+     console.error('[ScreenClaw] Failed to create offscreen document:', err);
+   }
 }
 
 async function closeOffscreenDocument() {
@@ -56,7 +69,6 @@ let badgeVisible = true;
 function showRecordingBadge() {
   chrome.action.setBadgeText({ text: 'REC' });
   chrome.action.setBadgeBackgroundColor({ color: '#ff4d6d' });
-  chrome.action.setBadgeTextColor({ color: '#ffffff' });
   chrome.action.setTitle({ title: 'ScreenClaw – Recording in progress…' });
 
   // Flash the badge on/off every 800ms
@@ -89,6 +101,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function handleMessage(message, sender) {
+  await statePromise;
   switch (message.type) {
     case 'START_RECORDING': {
       try {
@@ -124,6 +137,7 @@ async function handleMessage(message, sender) {
             isRecording: true,
             isPaused: false,
             startTime: Date.now(),
+            pauseTime: null,
             mode,
             hasAudio,
             hasMic,
@@ -134,9 +148,10 @@ async function handleMessage(message, sender) {
           // Show "REC" badge on extension icon (not captured in recording)
           showRecordingBadge();
 
-          // Trigger webcam overlay for "both" mode
-          if (mode === "both" && tabId) {
-            chrome.tabs.sendMessage(tabId, { type: "SHOW_WEBCAM_OVERLAY" }).catch(() => {});
+          if (mode === 'both' && tabId) {
+            chrome.tabs.sendMessage(tabId, { type: 'SHOW_WEBCAM_OVERLAY' }).catch((err) => {
+              console.warn('[ScreenClaw] SHOW_WEBCAM_OVERLAY message not received (tab may have changed or closed):', err.message);
+            });
           }
         }
 
@@ -161,10 +176,17 @@ async function handleMessage(message, sender) {
         target: 'offscreen',
       });
 
+      if (mode === 'both' && tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'HIDE_WEBCAM_OVERLAY' }).catch((err) => {
+          console.warn('[ScreenClaw] HIDE_WEBCAM_OVERLAY message not received (tab may have changed or closed):', err.message);
+        });
+      }
+
       recordingState = {
         isRecording: false,
         isPaused: false,
         startTime: null,
+        pauseTime: null,
         mode: null,
         hasAudio: true,
         hasMic: true,
@@ -174,11 +196,6 @@ async function handleMessage(message, sender) {
 
       // Clear badge
       hideRecordingBadge();
-
-      // Hide webcam overlay for "both" mode
-      if (mode === "both" && tabId) {
-        chrome.tabs.sendMessage(tabId, { type: "HIDE_WEBCAM_OVERLAY" }).catch(() => {});
-      }
 
       setTimeout(() => closeOffscreenDocument(), 10000);
       return response;
@@ -190,6 +207,7 @@ async function handleMessage(message, sender) {
         target: 'offscreen',
       });
       recordingState.isPaused = true;
+      recordingState.pauseTime = Date.now();
       await chrome.storage.local.set({ recordingState });
       return response;
     }
@@ -199,19 +217,26 @@ async function handleMessage(message, sender) {
         type: 'OFFSCREEN_RESUME',
         target: 'offscreen',
       });
+      if (recordingState.pauseTime) {
+        const pauseDuration = Date.now() - recordingState.pauseTime;
+        recordingState.startTime += pauseDuration;
+        recordingState.pauseTime = null;
+      }
       recordingState.isPaused = false;
       await chrome.storage.local.set({ recordingState });
       return response;
     }
 
     case 'GET_STATE': {
-      return { success: true, state: recordingState };
+      const isSenderTab = !!(sender.tab && recordingState.tabId === sender.tab.id);
+      return { success: true, state: recordingState, isSenderTab };
     }
 
     case 'RECORDING_SAVED': {
-      const { filename, size, duration } = message.payload;
+      const { filename, size, duration, mode } = message.payload;
       const history = (await chrome.storage.local.get('recordingHistory')).recordingHistory || [];
-      history.unshift({ filename, size, duration, date: new Date().toISOString(), mode: recordingState.mode });
+      const recordingMode = mode || recordingState.mode || 'screen';
+      history.unshift({ filename, size, duration, date: new Date().toISOString(), mode: recordingMode });
       if (history.length > 50) history.length = 50;
       await chrome.storage.local.set({ recordingHistory: history });
       return { success: true };
@@ -235,15 +260,17 @@ async function handleMessage(message, sender) {
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 chrome.runtime.onStartup.addListener(async () => {
-  const data = await chrome.storage.local.get('recordingState');
-  if (data.recordingState && data.recordingState.isRecording) {
+  await statePromise;
+  if (recordingState && recordingState.isRecording) {
     recordingState = {
       isRecording: false,
       isPaused: false,
       startTime: null,
+      pauseTime: null,
       mode: null,
       hasAudio: true,
       hasMic: true,
+      tabId: null,
     };
     await chrome.storage.local.set({ recordingState });
   }

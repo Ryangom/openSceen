@@ -6,7 +6,10 @@
 let webcamOverlay = null;
 let webcamStream = null;
 let isDragging = false;
+let isResizing = false;
 let dragOffset = { x: 0, y: 0 };
+let initialSize = { width: 0, height: 0 };
+let initialMousePos = { x: 0, y: 0 };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
@@ -21,6 +24,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
   }
 });
+
+// Auto-restore overlay on page load/reload if recording in "both" mode on this tab
+chrome.runtime.sendMessage({ type: 'GET_STATE' }).then((response) => {
+  if (response && response.success && response.state.isRecording && response.state.mode === 'both' && response.isSenderTab) {
+    showWebcamOverlay();
+  }
+}).catch((err) => console.error('[ScreenClaw] Failed to get state on load:', err));
 
 // ── Webcam Overlay ─────────────────────────────────────────────────────────
 
@@ -54,7 +64,7 @@ async function showWebcamOverlay() {
   webcamOverlay.appendChild(resizeHandle);
   document.body.appendChild(webcamOverlay);
 
-  // Dragging
+  // Dragging & Resizing
   webcamOverlay.addEventListener('mousedown', startDrag);
   document.addEventListener('mousemove', onDrag);
   document.addEventListener('mouseup', endDrag);
@@ -72,24 +82,43 @@ function hideWebcamOverlay() {
 }
 
 function startDrag(e) {
-  isDragging = true;
   const rect = webcamOverlay.getBoundingClientRect();
+  if (e.target.classList.contains('screenclaw-resize-handle')) {
+    isResizing = true;
+    initialSize.width = rect.width;
+    initialSize.height = rect.height;
+    initialMousePos.x = e.clientX;
+    initialMousePos.y = e.clientY;
+    webcamOverlay.style.transition = 'none';
+    e.preventDefault();
+    return;
+  }
+  isDragging = true;
   dragOffset.x = e.clientX - rect.left;
   dragOffset.y = e.clientY - rect.top;
   webcamOverlay.style.transition = 'none';
 }
 
 function onDrag(e) {
-  if (!isDragging || !webcamOverlay) return;
+  if (!webcamOverlay) return;
+  if (isResizing) {
+    const width = Math.max(120, initialSize.width + (e.clientX - initialMousePos.x));
+    const height = Math.max(90, initialSize.height + (e.clientY - initialMousePos.y));
+    webcamOverlay.style.setProperty('width', `${width}px`, 'important');
+    webcamOverlay.style.setProperty('height', `${height}px`, 'important');
+    return;
+  }
+  if (!isDragging) return;
   const x = e.clientX - dragOffset.x;
   const y = e.clientY - dragOffset.y;
-  webcamOverlay.style.left = `${x}px`;
-  webcamOverlay.style.top = `${y}px`;
-  webcamOverlay.style.right = 'auto';
-  webcamOverlay.style.bottom = 'auto';
+  webcamOverlay.style.setProperty('left', `${x}px`, 'important');
+  webcamOverlay.style.setProperty('top', `${y}px`, 'important');
+  webcamOverlay.style.setProperty('right', 'auto', 'important');
+  webcamOverlay.style.setProperty('bottom', 'auto', 'important');
 }
 
 function endDrag() {
   isDragging = false;
+  isResizing = false;
   if (webcamOverlay) webcamOverlay.style.transition = '';
 }

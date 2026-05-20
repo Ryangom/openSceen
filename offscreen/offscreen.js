@@ -12,6 +12,10 @@ let webcamStream = null;
 let micStream = null;
 let combinedStream = null;
 let recordingStartTime = null;
+let recordingMode = null;
+let canvas = null;
+let canvasStream = null;
+let animationId = null;
 
 // ── Runtime Message Handler ────────────────────────────────────────────────
 
@@ -49,112 +53,160 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleStart({ mode, hasAudio, hasMic }) {
   recordedChunks = [];
+  stopAllStreams();
+  recordingMode = mode;
 
-  const tracks = [];
-
-  // Use getDisplayMedia() directly in the offscreen document.
-  // The offscreen document was created with the DISPLAY_MEDIA reason,
-  // so Chrome permits getDisplayMedia() here without a user gesture.
-  if (mode === 'screen' || mode === 'both') {
-    try {
-      const displayConstraints = {
-        video: {
-          frameRate: { ideal: 30 },
-        },
-        audio: hasAudio,
-      };
-
-      screenStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
-      screenStream.getVideoTracks().forEach((t) => tracks.push(t));
-      if (hasAudio && screenStream.getAudioTracks().length > 0) {
-        screenStream.getAudioTracks().forEach((t) => tracks.push(t));
-      }
-    } catch (err) {
-      console.error('[Offscreen] Failed to create desktop stream:', err);
-      if (err.name === 'NotAllowedError') {
-        throw new Error('Screen capture was cancelled or denied by the user.');
-      }
-      let errorMsg = 'Failed to capture desktop: ' + err.message;
-      if (hasAudio) {
-        errorMsg += '. If you enabled System Audio, please ensure you also checked the "Share system audio" box in the Chrome picker.';
-      }
-      throw new Error(errorMsg);
+  try {
+    // For "both" mode, we need to composite screen + webcam via canvas
+    if (mode === 'both') {
+      return await handleBothMode({ hasAudio, hasMic });
     }
+
+    const tracks = [];
+
+    // Screen capture
+    if (mode === 'screen') {
+      try {
+        const displayConstraints = {
+          video: { frameRate: { ideal: 30 } },
+          audio: hasAudio,
+        };
+        screenStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
+        screenStream.getVideoTracks().forEach((t) => tracks.push(t));
+        if (hasAudio && screenStream.getAudioTracks().length > 0) {
+          screenStream.getAudioTracks().forEach((t) => tracks.push(t));
+        }
+      } catch (err) {
+        console.error('[Offscreen] Failed to create desktop stream:', err);
+        if (err.name === 'NotAllowedError') {
+          throw new Error('Screen capture was cancelled or denied by the user.');
+        }
+        throw new Error('Failed to capture desktop: ' + err.message);
+      }
+    }
+
+    // Webcam only mode
+    if (mode === 'webcam') {
+      try {
+        webcamStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: false,
+        });
+        webcamStream.getVideoTracks().forEach((t) => tracks.push(t));
+      } catch (err) {
+        console.error('[Offscreen] Webcam access denied:', err);
+        throw new Error('Cannot access webcam: ' + err.message);
+      }
+    }
+
+    // Microphone capture
+    if (hasMic) {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 },
+          video: false,
+        });
+        micStream.getAudioTracks().forEach((t) => tracks.push(t));
+      } catch (err) {
+        console.warn('[Offscreen] Microphone access denied:', err);
+      }
+    }
+
+    if (tracks.length === 0) {
+      throw new Error('No media tracks available. Please check permissions.');
+    }
+
+    combinedStream = new MediaStream(tracks);
+    startRecording(combinedStream);
+    return { success: true };
+  } catch (err) {
+    stopAllStreams();
+    throw err;
+  }
+}
+
+async function handleBothMode({ hasAudio, hasMic }) {
+  let screenVideoTrack = null;
+  let screenAudioTracks = [];
+
+  try {
+    const displayConstraints = {
+      video: { frameRate: { ideal: 30 } },
+      audio: hasAudio,
+    };
+    screenStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
+    screenVideoTrack = screenStream.getVideoTracks()[0];
+    if (hasAudio) {
+      screenAudioTracks = screenStream.getAudioTracks();
+    }
+  } catch (err) {
+    console.error('[Offscreen] Failed to create desktop stream:', err);
+    throw new Error('Failed to capture screen: ' + err.message);
   }
 
-  // Webcam capture — only for 'webcam' mode (both mode uses content overlay)
-  if (mode === 'webcam') {
-    try {
-      webcamStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user',
-        },
-        audio: false,
-      });
-      webcamStream.getVideoTracks().forEach((t) => tracks.push(t));
-    } catch (err) {
-      console.warn('[Offscreen] Webcam access denied:', err);
-    }
+  let webcamVideoTrack = null;
+  try {
+    webcamStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+      audio: false,
+    });
+    webcamVideoTrack = webcamStream.getVideoTracks()[0];
+  } catch (err) {
+    console.warn('[Offscreen] Webcam access denied:', err);
   }
 
-  // Microphone capture
+  const micAudioTracks = [];
   if (hasMic) {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100,
-        },
+        audio: { echoCancellation: true, noiseSuppression: true },
         video: false,
       });
-      micStream.getAudioTracks().forEach((t) => tracks.push(t));
+      micStream.getAudioTracks().forEach((t) => micAudioTracks.push(t));
     } catch (err) {
       console.warn('[Offscreen] Microphone access denied:', err);
     }
   }
 
-  if (tracks.length === 0) {
-    throw new Error('No media tracks available. Please check permissions.');
+  // Set up canvas for compositing
+  canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  let webcamVideo = null;
+  if (webcamVideoTrack) {
+    webcamVideo = document.createElement('video');
+    webcamVideo.srcObject = webcamStream;
+    webcamVideo.autoplay = true;
+    webcamVideo.muted = true;
+    await new Promise(r => webcamVideo.onloadedmetadata = r);
   }
 
-  combinedStream = new MediaStream(tracks);
+  const screenVideo = document.createElement('video');
+  screenVideo.srcObject = screenStream;
+  screenVideo.autoplay = true;
+  screenVideo.muted = true;
+  await new Promise(r => screenVideo.onloadedmetadata = r);
 
-  // Determine best supported MIME type – prefer MP4 for native Windows playback
-  const mimeType = getSupportedMimeType();
-  console.log('[Offscreen] Using MIME type:', mimeType);
+  canvas.width = screenVideo.videoWidth || 1920;
+  canvas.height = screenVideo.videoHeight || 1080;
 
-  mediaRecorder = new MediaRecorder(combinedStream, {
-    mimeType,
-    videoBitsPerSecond: 5_000_000,
-  });
-
-  mediaRecorder.ondataavailable = (event) => {
-    if (event.data && event.data.size > 0) {
-      recordedChunks.push(event.data);
+  const drawFrame = () => {
+    if (!canvas) return;
+    ctx.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
+    if (webcamVideo && webcamVideo.readyState >= 2) {
+      const pipSize = Math.min(canvas.width, canvas.height) * 0.25;
+      ctx.drawImage(webcamVideo, canvas.width - pipSize - 20, canvas.height - pipSize - 20, pipSize, pipSize);
     }
+    animationId = requestAnimationFrame(drawFrame);
   };
+  drawFrame();
 
-  // IMPORTANT: stopAllStreams is called HERE (inside onstop) instead of
-  // in handleStop(). This ensures MediaRecorder fully finalises the
-  // container headers before the underlying tracks are destroyed.
-  mediaRecorder.onstop = () => {
-    stopAllStreams();
-    saveRecording(mimeType);
-  };
+  canvasStream = canvas.captureStream(30);
+  if (screenAudioTracks.length > 0) {
+    screenAudioTracks.forEach((t) => canvasStream.addTrack(t));
+  }
+  micAudioTracks.forEach((t) => canvasStream.addTrack(t));
 
-  mediaRecorder.onerror = (event) => {
-    console.error('[Offscreen] MediaRecorder error:', event.error);
-  };
-
-  recordingStartTime = Date.now();
-  // No timeslice — this makes Chrome write a non-fragmented container
-  // with a complete sample table (moov atom for MP4 / Cues for WebM),
-  // which is required for the seek slider to work in media players.
-  mediaRecorder.start();
-
+  startRecording(canvasStream);
   return { success: true };
 }
 
@@ -162,13 +214,7 @@ async function handleStop() {
   if (!mediaRecorder || mediaRecorder.state === 'inactive') {
     return { success: false, error: 'No active recording' };
   }
-
-  // Just call stop(). Do NOT call requestData() before stop — that would
-  // create a fragment boundary that breaks the seek index.
-  // Do NOT call stopAllStreams() here — let onstop handle it so the
-  // MediaRecorder can write proper container-end bytes first.
   mediaRecorder.stop();
-
   return { success: true };
 }
 
@@ -188,19 +234,61 @@ async function handleResume() {
   return { success: false, error: 'Not paused' };
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+function startRecording(stream) {
+  const mimeType = getSupportedMimeType();
+  console.log('[Offscreen] Using MIME type:', mimeType);
+
+  mediaRecorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 5_000_000,
+  });
+
+  mediaRecorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) {
+      recordedChunks.push(event.data);
+    }
+  };
+
+  mediaRecorder.onstop = () => {
+    stopAllStreams();
+    saveRecording(mimeType);
+  };
+
+  mediaRecorder.onerror = (event) => {
+    console.error('[Offscreen] MediaRecorder error:', event.error);
+  };
+
+  recordingStartTime = Date.now();
+  mediaRecorder.start();
+}
+
+function stopAllStreams() {
+  if (animationId) {
+    cancelAnimationFrame(animationId);
+    animationId = null;
+  }
+  if (canvas) {
+    canvas.remove();
+    canvas = null;
+  }
+  [screenStream, webcamStream, micStream, combinedStream, canvasStream].forEach((stream) => {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  });
+  screenStream = null;
+  webcamStream = null;
+  micStream = null;
+  combinedStream = null;
+  canvasStream = null;
+}
 
 /**
- * Prefer MP4 (H.264 + AAC) so the file plays natively on Windows
- * without requiring VLC or additional codecs.  Falls back to WebM.
+ * Prefer WebM for broader browser compatibility.
+ * Chrome's MediaRecorder doesn't support MP4 container creation.
  */
 function getSupportedMimeType() {
   const types = [
-    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',   // H.264 Baseline + AAC-LC
-    'video/mp4;codecs=avc1,mp4a.40.2',           // H.264 + AAC
-    'video/mp4;codecs=avc1.42E01E,opus',          // H.264 + Opus
-    'video/mp4;codecs=avc1,opus',
-    'video/mp4',
     'video/webm;codecs=vp9,opus',
     'video/webm;codecs=vp8,opus',
     'video/webm;codecs=vp9',
@@ -211,18 +299,6 @@ function getSupportedMimeType() {
     if (MediaRecorder.isTypeSupported(type)) return type;
   }
   return 'video/webm';
-}
-
-function stopAllStreams() {
-  [screenStream, webcamStream, micStream, combinedStream].forEach((stream) => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-  });
-  screenStream = null;
-  webcamStream = null;
-  micStream = null;
-  combinedStream = null;
 }
 
 /**
@@ -266,7 +342,7 @@ function saveRecording(mimeType) {
   // Notify background for history tracking (metadata only, no heavy payload)
   chrome.runtime.sendMessage({
     type: 'RECORDING_SAVED',
-    payload: { filename, size: blob.size, duration },
+    payload: { filename, size: blob.size, duration, mode: recordingMode },
   });
 
   // Cleanup

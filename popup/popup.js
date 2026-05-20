@@ -310,7 +310,11 @@ async function restoreState() {
 
       // Restore timer
       if (response.state.startTime) {
-        elapsedSeconds = Math.floor((Date.now() - response.state.startTime) / 1000);
+        if (response.state.isPaused && response.state.pauseTime) {
+          elapsedSeconds = Math.floor((response.state.pauseTime - response.state.startTime) / 1000);
+        } else {
+          elapsedSeconds = Math.floor((Date.now() - response.state.startTime) / 1000);
+        }
       }
 
       enterRecordingUI();
