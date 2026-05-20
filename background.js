@@ -90,6 +90,81 @@ function hideRecordingBadge() {
   chrome.action.setTitle({ title: 'ScreenClaw – Screen & Video Recorder' });
 }
 
+async function ensureContentScriptInjected(tabId) {
+  console.log(`[ScreenClaw] ensureContentScriptInjected called for tab ${tabId}`);
+  if (!tabId) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab || !tab.url || tab.url.startsWith('chrome:') || tab.url.startsWith('chrome-extension:') || tab.url.startsWith('about:')) {
+      console.log(`[ScreenClaw] Tab ${tabId} is a restricted page (${tab?.url || 'unknown URL'}), skipping injection.`);
+      return;
+    }
+  } catch (e) {
+    console.error(`[ScreenClaw] Error getting info for tab ${tabId}:`, e);
+    return;
+  }
+
+  try {
+    // Send a ping to check if content script is active
+    console.log(`[ScreenClaw] Pinging content script on tab ${tabId}...`);
+    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+    console.log(`[ScreenClaw] Ping succeeded for tab ${tabId}, content script is active.`);
+  } catch (err) {
+    // If ping fails, inject script and stylesheet
+    console.log(`[ScreenClaw] Ping failed (content script inactive) on tab ${tabId}. Error: ${err.message}. Programmatically injecting...`);
+    try {
+      await chrome.scripting.insertCSS({
+        target: { tabId },
+        files: ['content.css']
+      });
+      console.log(`[ScreenClaw] content.css injected successfully on tab ${tabId}`);
+
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content.js']
+      });
+      console.log(`[ScreenClaw] content.js injected successfully on tab ${tabId}`);
+
+      // Small pause to allow initialization
+      await new Promise(resolve => setTimeout(resolve, 150));
+    } catch (injectErr) {
+      console.error(`[ScreenClaw] Failed to inject content script on tab ${tabId}:`, injectErr);
+    }
+  }
+}
+
+async function showOverlaysOnTab(tabId) {
+  console.log(`[ScreenClaw] showOverlaysOnTab called for tab ${tabId}`);
+  if (!tabId) return;
+  await ensureContentScriptInjected(tabId);
+  
+  if (recordingState.isRecording) {
+    console.log(`[ScreenClaw] Sending show overlay messages to tab ${tabId} (mode: ${recordingState.mode})...`);
+    if (recordingState.mode === 'both') {
+      chrome.tabs.sendMessage(tabId, { type: 'SHOW_WEBCAM_OVERLAY' }).then(() => {
+        console.log(`[ScreenClaw] SHOW_WEBCAM_OVERLAY received by tab ${tabId}`);
+      }).catch((err) => {
+        console.warn('[ScreenClaw] SHOW_WEBCAM_OVERLAY message not received on tab:', tabId, err.message);
+      });
+    }
+    chrome.tabs.sendMessage(tabId, { type: 'SHOW_CONTROLS_OVERLAY' }).then(() => {
+      console.log(`[ScreenClaw] SHOW_CONTROLS_OVERLAY received by tab ${tabId}`);
+    }).catch((err) => {
+      console.warn('[ScreenClaw] SHOW_CONTROLS_OVERLAY message not received on tab:', tabId, err.message);
+    });
+    chrome.tabs.sendMessage(tabId, { type: 'RECORDING_STATE_CHANGED', state: recordingState }).catch(() => {});
+  } else {
+    console.log(`[ScreenClaw] Not showing overlays: isRecording is false`);
+  }
+}
+
+async function hideOverlaysOnTab(tabId) {
+  console.log(`[ScreenClaw] hideOverlaysOnTab called for tab ${tabId}`);
+  if (!tabId) return;
+  chrome.tabs.sendMessage(tabId, { type: 'HIDE_WEBCAM_OVERLAY' }).catch(() => {});
+  chrome.tabs.sendMessage(tabId, { type: 'HIDE_CONTROLS_OVERLAY' }).catch(() => {});
+}
+
 async function broadcastStateChange() {
   chrome.runtime.sendMessage({ type: 'STATE_CHANGED', state: recordingState }).catch(() => {});
   if (recordingState.tabId) {
@@ -100,6 +175,7 @@ async function broadcastStateChange() {
 // ── Message Handler ────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log(`[ScreenClaw] Background service worker received message: ${message.type}`);
   handleMessage(message, sender).then(sendResponse).catch((err) => {
     console.error('[ScreenClaw] Message handler error:', err);
     sendResponse({ success: false, error: err.message });
@@ -155,16 +231,7 @@ async function handleMessage(message, sender) {
           // Show "REC" badge on extension icon (not captured in recording)
           showRecordingBadge();
 
-          if (mode === 'both' && tabId) {
-            chrome.tabs.sendMessage(tabId, { type: 'SHOW_WEBCAM_OVERLAY' }).catch((err) => {
-              console.warn('[ScreenClaw] SHOW_WEBCAM_OVERLAY message not received (tab may have changed or closed):', err.message);
-            });
-          }
-          if (tabId) {
-            chrome.tabs.sendMessage(tabId, { type: 'SHOW_CONTROLS_OVERLAY' }).catch((err) => {
-              console.warn('[ScreenClaw] SHOW_CONTROLS_OVERLAY message not received:', err.message);
-            });
-          }
+          await showOverlaysOnTab(tabId);
           await broadcastStateChange();
         }
 
@@ -189,16 +256,7 @@ async function handleMessage(message, sender) {
         target: 'offscreen',
       });
 
-      if (mode === 'both' && tabId) {
-        chrome.tabs.sendMessage(tabId, { type: 'HIDE_WEBCAM_OVERLAY' }).catch((err) => {
-          console.warn('[ScreenClaw] HIDE_WEBCAM_OVERLAY message not received (tab may have changed or closed):', err.message);
-        });
-      }
-      if (tabId) {
-        chrome.tabs.sendMessage(tabId, { type: 'HIDE_CONTROLS_OVERLAY' }).catch((err) => {
-          console.warn('[ScreenClaw] HIDE_CONTROLS_OVERLAY message not received:', err.message);
-        });
-      }
+      await hideOverlaysOnTab(tabId);
 
       recordingState = {
         isRecording: false,
@@ -229,12 +287,7 @@ async function handleMessage(message, sender) {
         target: 'offscreen',
       });
 
-      if (mode === 'both' && tabId) {
-        chrome.tabs.sendMessage(tabId, { type: 'HIDE_WEBCAM_OVERLAY' }).catch(() => {});
-      }
-      if (tabId) {
-        chrome.tabs.sendMessage(tabId, { type: 'HIDE_CONTROLS_OVERLAY' }).catch(() => {});
-      }
+      await hideOverlaysOnTab(tabId);
 
       recordingState = {
         isRecording: false,
@@ -335,5 +388,34 @@ chrome.runtime.onStartup.addListener(async () => {
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('onboarding/onboarding.html') });
+  }
+});
+
+// ── Tab Event Listeners ────────────────────────────────────────────────────
+// Ensure overlays follow the user's active tab when switching or reloading tabs
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  await statePromise;
+  if (recordingState && recordingState.isRecording) {
+    const oldTabId = recordingState.tabId;
+    const newTabId = activeInfo.tabId;
+    
+    if (oldTabId && oldTabId !== newTabId) {
+      await hideOverlaysOnTab(oldTabId);
+    }
+    
+    recordingState.tabId = newTabId;
+    await chrome.storage.local.set({ recordingState });
+    
+    await showOverlaysOnTab(newTabId);
+  }
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  await statePromise;
+  if (recordingState && recordingState.isRecording && tabId === recordingState.tabId) {
+    if (changeInfo.status === 'complete') {
+      await showOverlaysOnTab(tabId);
+    }
   }
 });
