@@ -135,6 +135,47 @@ async function askForMicrophonePermission() {
   }
 }
 
+async function askForCameraPermission() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    stream.getTracks().forEach((track) => track.stop());
+    return true;
+  } catch (camErr) {
+    let logMsg = `Camera permission not granted: ${camErr?.name} - ${camErr?.message}`;
+    if (camErr?.stack) logMsg += `\nStack: ${camErr.stack}`;
+    console.log(logMsg);
+
+    let message =
+      'Camera access is required to record your webcam.\n\n' +
+      'Click OK to open Extension settings and allow Camera access.\n' +
+      'Click Cancel to cancel recording.';
+
+    if (camErr?.name === 'NotFoundError') {
+      message =
+        'No camera was found.\n\n' +
+        'Connect or enable a camera, then try again.\n\n' +
+        'Click OK to open Extension settings.';
+    }
+
+    if (camErr?.name === 'NotReadableError') {
+      message =
+        'Chrome could not read from your camera.\n\n' +
+        'Another app may be using it, or your OS privacy settings may be blocking it.\n\n' +
+        'Click OK to open Extension settings.';
+    }
+
+    const openSettings = confirm(message);
+
+    if (openSettings) {
+      chrome.tabs.create({
+        url: `chrome://settings/content/siteDetails?site=chrome-extension://${chrome.runtime.id}`,
+      });
+    }
+
+    return null;
+  }
+}
+
 async function startRecording() {
   btnRecord.disabled = true;
   btnRecord.querySelector('span').textContent = 'Starting...';
@@ -152,6 +193,15 @@ async function startRecording() {
       }
 
       micAllowed = permissionResult;
+    }
+
+    if (selectedMode === 'webcam' || selectedMode === 'both') {
+      const cameraResult = await askForCameraPermission();
+      if (cameraResult === null) {
+        btnRecord.disabled = false;
+        btnRecord.querySelector('span').textContent = 'Start Recording';
+        return;
+      }
     }
 
     let tabId = null;

@@ -16,6 +16,8 @@ let recordingMode = null;
 let canvas = null;
 let canvasStream = null;
 let animationId = null;
+let drawIntervalId = null;
+let audioCtx = null;
 
 // ── Runtime Message Handler ────────────────────────────────────────────────
 
@@ -62,7 +64,8 @@ async function handleStart({ mode, hasAudio, hasMic }) {
       return await handleBothMode({ hasAudio, hasMic });
     }
 
-    const tracks = [];
+    const videoTracks = [];
+    const audioStreams = [];
 
     // Screen capture
     if (mode === 'screen') {
@@ -72,9 +75,9 @@ async function handleStart({ mode, hasAudio, hasMic }) {
           audio: hasAudio,
         };
         screenStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
-        screenStream.getVideoTracks().forEach((t) => tracks.push(t));
+        screenStream.getVideoTracks().forEach((t) => videoTracks.push(t));
         if (hasAudio && screenStream.getAudioTracks().length > 0) {
-          screenStream.getAudioTracks().forEach((t) => tracks.push(t));
+          audioStreams.push(screenStream);
         }
       } catch (err) {
         console.error('[Offscreen] Failed to create desktop stream:', err);
@@ -92,7 +95,7 @@ async function handleStart({ mode, hasAudio, hasMic }) {
           video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
           audio: false,
         });
-        webcamStream.getVideoTracks().forEach((t) => tracks.push(t));
+        webcamStream.getVideoTracks().forEach((t) => videoTracks.push(t));
       } catch (err) {
         console.error('[Offscreen] Webcam access denied:', err);
         throw new Error('Cannot access webcam: ' + err.message);
@@ -106,17 +109,27 @@ async function handleStart({ mode, hasAudio, hasMic }) {
           audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 },
           video: false,
         });
-        micStream.getAudioTracks().forEach((t) => tracks.push(t));
+        audioStreams.push(micStream);
       } catch (err) {
         console.warn('[Offscreen] Microphone access denied:', err);
       }
     }
 
-    if (tracks.length === 0) {
+    const finalTracks = [...videoTracks];
+
+    // Mix audio streams if we have any
+    if (audioStreams.length > 0) {
+      const mixedTrack = mixAudioStreams(audioStreams);
+      if (mixedTrack) {
+        finalTracks.push(mixedTrack);
+      }
+    }
+
+    if (finalTracks.length === 0) {
       throw new Error('No media tracks available. Please check permissions.');
     }
 
-    combinedStream = new MediaStream(tracks);
+    combinedStream = new MediaStream(finalTracks);
     startRecording(combinedStream);
     return { success: true };
   } catch (err) {
@@ -127,7 +140,7 @@ async function handleStart({ mode, hasAudio, hasMic }) {
 
 async function handleBothMode({ hasAudio, hasMic }) {
   let screenVideoTrack = null;
-  let screenAudioTracks = [];
+  const audioStreams = [];
 
   try {
     const displayConstraints = {
@@ -136,8 +149,8 @@ async function handleBothMode({ hasAudio, hasMic }) {
     };
     screenStream = await navigator.mediaDevices.getDisplayMedia(displayConstraints);
     screenVideoTrack = screenStream.getVideoTracks()[0];
-    if (hasAudio) {
-      screenAudioTracks = screenStream.getAudioTracks();
+    if (hasAudio && screenStream.getAudioTracks().length > 0) {
+      audioStreams.push(screenStream);
     }
   } catch (err) {
     console.error('[Offscreen] Failed to create desktop stream:', err);
@@ -155,14 +168,13 @@ async function handleBothMode({ hasAudio, hasMic }) {
     console.warn('[Offscreen] Webcam access denied:', err);
   }
 
-  const micAudioTracks = [];
   if (hasMic) {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
         video: false,
       });
-      micStream.getAudioTracks().forEach((t) => micAudioTracks.push(t));
+      audioStreams.push(micStream);
     } catch (err) {
       console.warn('[Offscreen] Microphone access denied:', err);
     }
@@ -177,14 +189,14 @@ async function handleBothMode({ hasAudio, hasMic }) {
     webcamVideo.srcObject = webcamStream;
     webcamVideo.autoplay = true;
     webcamVideo.muted = true;
-    await new Promise(r => webcamVideo.onloadedmetadata = r);
+    await waitForVideoLoad(webcamVideo);
   }
 
   const screenVideo = document.createElement('video');
   screenVideo.srcObject = screenStream;
   screenVideo.autoplay = true;
   screenVideo.muted = true;
-  await new Promise(r => screenVideo.onloadedmetadata = r);
+  await waitForVideoLoad(screenVideo);
 
   canvas.width = screenVideo.videoWidth || 1920;
   canvas.height = screenVideo.videoHeight || 1080;
@@ -196,15 +208,21 @@ async function handleBothMode({ hasAudio, hasMic }) {
       const pipSize = Math.min(canvas.width, canvas.height) * 0.25;
       ctx.drawImage(webcamVideo, canvas.width - pipSize - 20, canvas.height - pipSize - 20, pipSize, pipSize);
     }
-    animationId = requestAnimationFrame(drawFrame);
   };
   drawFrame();
 
-  canvasStream = canvas.captureStream(30);
-  if (screenAudioTracks.length > 0) {
-    screenAudioTracks.forEach((t) => canvasStream.addTrack(t));
+  const frameRate = 30;
+  drawIntervalId = setInterval(drawFrame, 1000 / frameRate);
+
+  canvasStream = canvas.captureStream(frameRate);
+
+  // Mix audio streams if we have any
+  if (audioStreams.length > 0) {
+    const mixedTrack = mixAudioStreams(audioStreams);
+    if (mixedTrack) {
+      canvasStream.addTrack(mixedTrack);
+    }
   }
-  micAudioTracks.forEach((t) => canvasStream.addTrack(t));
 
   startRecording(canvasStream);
   return { success: true };
@@ -266,6 +284,16 @@ function stopAllStreams() {
   if (animationId) {
     cancelAnimationFrame(animationId);
     animationId = null;
+  }
+  if (drawIntervalId) {
+    clearInterval(drawIntervalId);
+    drawIntervalId = null;
+  }
+  if (audioCtx) {
+    try {
+      audioCtx.close();
+    } catch (e) {}
+    audioCtx = null;
   }
   if (canvas) {
     canvas.remove();
@@ -348,4 +376,38 @@ function saveRecording(mimeType) {
   // Cleanup
   recordedChunks = [];
   recordingStartTime = null;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function waitForVideoLoad(video) {
+  return new Promise((resolve) => {
+    if (video.readyState >= 1) { // HAVE_METADATA or higher
+      resolve();
+    } else {
+      video.onloadedmetadata = () => resolve();
+      // Safeguard timeout
+      setTimeout(resolve, 3000);
+    }
+  });
+}
+
+function mixAudioStreams(streams) {
+  const activeStreams = streams.filter(s => s && s.getAudioTracks().length > 0);
+  if (activeStreams.length === 0) return null;
+  if (activeStreams.length === 1) return activeStreams[0].getAudioTracks()[0];
+
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const dest = audioCtx.createMediaStreamDestination();
+    activeStreams.forEach((stream) => {
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(dest);
+    });
+    return dest.stream.getAudioTracks()[0];
+  } catch (err) {
+    console.error('[Offscreen] Error mixing audio streams:', err);
+    // Fallback: return the first stream's track
+    return activeStreams[0].getAudioTracks()[0];
+  }
 }

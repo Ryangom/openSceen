@@ -45,3 +45,15 @@ All previously identified bugs in the ScreenClaw Chrome extension codebase have 
 ### 7. Content Script Injection
 *   **Status:** RESOLVED
 *   **Design Rationale:** Content scripts must match `<all_urls>` to support injecting the floating webcam bubble on whichever webpage the user chooses to record. This is normal and expected for screen-recording extensions.
+
+### 8. Canvas Composition Throttling in Offscreen Mode
+*   **Status:** RESOLVED
+*   **Fix:** Replaced `requestAnimationFrame` with a 30 FPS `setInterval` inside `offscreen.js` for canvas rendering. Chrome heavily throttles `requestAnimationFrame` in hidden pages (such as offscreen documents), which previously caused background canvas captures in "both" mode to freeze or record at 0-1 FPS.
+
+### 9. Multi-Audio Source Mixing (Mic + System Audio)
+*   **Status:** RESOLVED
+*   **Fix:** Integrated Web Audio API's `AudioContext` inside `offscreen.js` (`mixAudioStreams`) to merge multiple input audio streams (System Audio + Microphone Audio) into a single track before feeding it to `MediaRecorder`. Since `MediaRecorder` only captures the first audio track of a stream and discards any additional ones, this allows both sources to be recorded simultaneously.
+
+### 10. Missing Popup Camera Permission Prompt
+*   **Status:** RESOLVED
+*   **Fix:** Added an interactive `askForCameraPermission()` flow in `popup.js` before starting a webcam or combined mode recording. This prevents recording failures because invisible offscreen documents cannot show permission prompts and will crash or hang if camera access hasn't already been granted.
