@@ -14,16 +14,19 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }).then((response) => {
 // State change listener
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'STATE_CHANGED' || message.type === 'RECORDING_STATE_CHANGED') {
-    updateUI(message.state);
+    if (message.state) {
+      updateUI(message.state);
+    }
   }
 });
 
 function updateUI(state) {
-  if (!state.isRecording) {
-    closeWebcam();
-    window.close();
-    return;
-  }
+   if (!state) return;
+   if (!state.isRecording) {
+     closeWebcam();
+     window.close();
+     return;
+   }
 
   const container = document.getElementById('overlay-container');
   const btnPause = document.getElementById('btn-pause');

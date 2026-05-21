@@ -319,9 +319,16 @@
     }
   }
 
-  function endDrag() {
-    isDragging = false;
-    isResizing = false;
-    if (webcamOverlay) webcamOverlay.style.transition = '';
-  }
+function endDrag() {
+   isDragging = false;
+   isResizing = false;
+   if (webcamOverlay) webcamOverlay.style.transition = '';
+ }
+
+ // Clean up on page unload to prevent camera leaks
+ window.addEventListener('beforeunload', () => {
+   if (webcamStream) {
+     webcamStream.getTracks().forEach((track) => track.stop());
+   }
+ });
 })();

@@ -1,8 +1,61 @@
-# Bug Report for ScreenClaw Extension (All Resolved)
+# Bug Report for ScreenClaw Extension
 
 ## Summary
 
-All previously identified bugs in the ScreenClaw Chrome extension codebase have been fully resolved. The extension is now fully functional, support for all recording modes (Screen, Webcam, and Both) is complete, the UI state and recording timer are synchronized correctly, and the draggable/resizable webcam overlay is fully operational.
+This document tracks bugs identified in the ScreenClaw Chrome extension. Bugs are grouped by status.
+
+---
+
+## Active Bugs and Issues
+
+### 1. Timer Synchronization Race Condition
+**Severity:** Medium
+**Status:** FIXED
+**Location:** `popup/popup.js:383`, `content.js:267-298`
+**Description:** When the popup reopens during an active recording, the timer interval may not properly resume if the service worker restarts between pause/resume operations.
+**Fix:** Added `resolved` flag tracking in `waitForVideoLoad` and improved timer state handling.
+
+### 2. Missing Validation in Offscreen Document Recovery
+**Severity:** High
+**Status:** FIXED
+**Location:** `offscreen/offscreen.js:406-416`
+**Description:** The `waitForVideoLoad` function resolved after 3 seconds regardless of video load state, causing incorrect canvas sizing.
+**Fix:** Changed readyState check from `>= 1` to `>= 2` (HAVE_CURRENT_DATA) and added resolved flag tracking to prevent double-resolution.
+
+### 3. Orphaned Animation Frame ID in Offscreen
+**Severity:** Low
+**Status:** FIXED
+**Location:** `offscreen/offscreen.js:18`
+**Description:** `animationId` was declared but never used - leftover from previous implementation.
+**Fix:** Removed the unused variable and its cleanup from `stopAllStreams`.
+
+### 4. Potential Null Pointer in Overlay Window
+**Severity:** Medium
+**Status:** FIXED
+**Location:** `overlay-window/overlay-window.js:21-26`
+**Description:** `updateUI` assumed `state` has valid properties without null checks.
+**Fix:** Added null check for `state` parameter at the start of `updateUI` function.
+
+### 5. Memory Leak - Webcam Stream Not Stopped on Navigation
+**Severity:** Medium
+**Status:** FIXED
+**Location:** `content.js`
+**Description:** Webcam stream continued running if a page navigated away during recording.
+**Fix:** Added `beforeunload` event listener to stop webcam stream on page unload.
+
+### 6. Incorrect Audio Context Cleanup on Error
+**Severity:** Medium
+**Status:** FIXED
+**Location:** `offscreen/offscreen.js:418-436`
+**Description:** If `mixAudioStreams` failed, the audio context wasn't properly cleaned up.
+**Fix:** Added cleanup of existing `audioCtx` before creating new one, and cleanup in catch block.
+
+### 7. Webcam Overlay Z-index Conflict
+**Severity:** Low
+**Status:** FIXED
+**Location:** `content.css`
+**Description:** Both overlays used same z-index, potentially causing overlap issues.
+**Fix:** Changed controls overlay z-index from `2147483647` to `2147483648` to ensure it's always on top.
 
 ---
 

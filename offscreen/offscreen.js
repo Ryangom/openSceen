@@ -15,7 +15,6 @@ let recordingStartTime = null;
 let recordingMode = null;
 let canvas = null;
 let canvasStream = null;
-let animationId = null;
 let drawIntervalId = null;
 let audioCtx = null;
 let shouldDiscard = false;
@@ -304,10 +303,6 @@ function startRecording(stream) {
 }
 
 function stopAllStreams() {
-  if (animationId) {
-    cancelAnimationFrame(animationId);
-    animationId = null;
-  }
   if (drawIntervalId) {
     clearInterval(drawIntervalId);
     drawIntervalId = null;
@@ -405,12 +400,24 @@ function saveRecording(mimeType) {
 
 function waitForVideoLoad(video) {
   return new Promise((resolve) => {
-    if (video.readyState >= 1) { // HAVE_METADATA or higher
+    if (video.readyState >= 2) { // HAVE_CURRENT_DATA or higher
       resolve();
     } else {
-      video.onloadedmetadata = () => resolve();
+      let resolved = false;
+      video.onloadedmetadata = () => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      };
       // Safeguard timeout
-      setTimeout(resolve, 3000);
+      setTimeout(() => {
+        if (!resolved) {
+          console.warn('[Offscreen] video load timeout, using fallback dimensions');
+          resolved = true;
+          resolve();
+        }
+      }, 3000);
     }
   });
 }
@@ -421,6 +428,11 @@ function mixAudioStreams(streams) {
   if (activeStreams.length === 1) return activeStreams[0].getAudioTracks()[0];
 
   try {
+    // Clean up any existing audio context first
+    if (audioCtx) {
+      try { audioCtx.close(); } catch (e) {}
+      audioCtx = null;
+    }
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
     activeStreams.forEach((stream) => {
@@ -430,7 +442,10 @@ function mixAudioStreams(streams) {
     return dest.stream.getAudioTracks()[0];
   } catch (err) {
     console.error('[Offscreen] Error mixing audio streams:', err);
-    // Fallback: return the first stream's track
+    if (audioCtx) {
+      try { audioCtx.close(); } catch (e) {}
+      audioCtx = null;
+    }
     return activeStreams[0].getAudioTracks()[0];
   }
 }
