@@ -1,0 +1,20 @@
+{
+  "name": "opensceen",
+  "version": "1.0.0",
+  "description": "A premium Chrome extension for recording your screen, webcam, or both with system audio and microphone support. Built with Chrome Manifest V3.",
+  "main": "background.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ryangom/openSceen.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Ryangom/openSceen/issues"
+  },
+  "homepage": "https://github.com/Ryangom/openSceen#readme"
+}

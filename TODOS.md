@@ -1,0 +1,24 @@
+# ScreenClaw Desktop Port (Electron + Angular) - TODO
+
+- [ ] Scaffold new directory `screenclaw-desktop/` for an Electron + Angular app (Windows-only).
+- [ ] Implement Electron main-process recording engine:
+  - [ ] Screen/window capture via `desktopCapturer` / getUserMedia equivalents
+  - [ ] Mic capture via getUserMedia (WebAudio mixing best-effort)
+  - [ ] “Both” mode: PiP compositing using a canvas + MediaRecorder
+  - [ ] Pause/Resume/Stop/Cancel controls
+- [ ] Implement Angular renderer UI:
+  - [ ] Mode selection (Screen/Webcam/Both)
+  - [ ] System Audio toggle (best-effort)
+  - [ ] Microphone toggle
+  - [ ] Start/Pause/Resume/Stop/Cancel + timer UI
+  - [ ] History panel (local JSON)
+- [ ] Implement always-on-top floating controls + webcam PiP overlay.
+- [ ] IPC wiring between renderer and main to control recording.
+- [ ] Run `npm install` and `npm run dev` to verify the app launches.
+- [ ] Manual functional tests:
+  - [ ] Screen mode records to WebM
+  - [ ] Webcam mode records
+  - [ ] Both mode records composited PiP
+  - [ ] Pause/Resume works
+  - [ ] Stop saves; Cancel discards
+  - [ ] History updates
