@@ -29,12 +29,12 @@ This document tracks bugs identified in the ScreenClaw Chrome extension. Bugs ar
 **Description:** `animationId` was declared but never used - leftover from previous implementation.
 **Fix:** Removed the unused variable and its cleanup from `stopAllStreams`.
 
-### 4. Potential Null Pointer in Overlay Window
+### 4. Potential Null Pointer in Overlay Window (Component Deprecated & Removed)
 **Severity:** Medium
-**Status:** FIXED
-**Location:** `overlay-window/overlay-window.js:21-26`
+**Status:** DEPRECATED & REMOVED
+**Location:** `overlay-window/overlay-window.js`
 **Description:** `updateUI` assumed `state` has valid properties without null checks.
-**Fix:** Added null check for `state` parameter at the start of `updateUI` function.
+**Fix:** Added null check for `state` parameter at the start of `updateUI` function. The entire `overlay-window` directory was subsequently removed from the codebase as it was obsolete.
 
 ### 5. Memory Leak - Webcam Stream Not Stopped on Navigation
 **Severity:** Medium
